@@ -68,6 +68,23 @@ inner = hour of day 0..23; values are MEANS PER HOUR over the days of that day t
 | `oracle_gain_bXX` | `lost_mpc - lost_oracle` |
 | `shortage_bXX`, `overflow_bXX` | MPC(GRU) `plan()` hour-1 shortage and overflow slack per zone, mean over decision hours |
 
+### Addendum (version 2.1): learned-policy and dock-level layers
+
+Added to every period's layer dict (same `{"wd": [[24] x 30], "we": ...}` shape, means per hour):
+
+| key | meaning |
+|---|---|
+| `dep_per_dock` | observed departures per hour per 100 docks (dep / cap x 100) |
+| `fill` | mean fill share: bikes / cap at the start of the hour (0..1), from the panel |
+| `lost_ppo_gnn_bXX` | trips lost under the PPO-GNN policy (argmax, mean over seeds 0-2, the selected checkpoint of each seed) |
+| `lost_ppo_mlp_bXX` | same for the PPO-MLP policy (optional; present only if computed) |
+| `ppo_gain_bXX` | `lost_mpc_bXX - lost_ppo_gnn_bXX` (positive = the policy lost fewer trips than full MPC there) |
+| `override_bXX` | share of decision hours (0..1) in which the PPO-GNN policy's chosen slot changed this zone: the slot's merged moves differ from the continue slot's, and the zone is a source or destination of a slot move or has a different net flow than under continue (so cancelling an MPC move by choosing "no move" counts too); mean over seeds |
+| `policy_net_bXX` | mean net bikes per hour moved into (+) or out of (-) this zone by the PPO-GNN policy's own moves (the part of the budget it controls), mean over seeds |
+
+Added to `weekly[period]`: `ppo_gnn_bXX`, `ppo_mlp_bXX` (if computed): mean lost trips per week, mean over seeds.
+Added to `meta`: `ppo: {"gnn_checkpoints": [...], "mlp_checkpoints": [...], "seeds": [0,1,2], "mode": "argmax", "selected_updates": {"gnn": [...], "mlp": [...]}}` (the checkpoint chosen on validation per seed, as in the paper).
+
 ## `layers.geojson`
 
 Same 30 zone features. Properties: `zone`, `cap`, `n_stations`, `lat`, `lon`, then one flat key per

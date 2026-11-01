@@ -54,6 +54,11 @@ FRESH = "--fresh" in sys.argv
 PERIODS_WANTED = ["val", "test"]
 if "--periods" in sys.argv:
     PERIODS_WANTED = sys.argv[sys.argv.index("--periods") + 1].split(",")
+PPO_ARCHS = ["gnn", "mlp"]                          # --ppo-archs gnn   (GNN only)   |   --ppo-archs gnn,mlp   (default)
+if "--ppo-archs" in sys.argv:
+    PPO_ARCHS = [a for a in sys.argv[sys.argv.index("--ppo-archs") + 1].split(",") if a]
+assert set(PPO_ARCHS) <= {"gnn", "mlp"} and (not PPO_ARCHS or PPO_ARCHS[0] == "gnn"), PPO_ARCHS
+PPO_SEEDS = [0, 1, 2]
 PERIOD_LABELS = {"val": "Validation: 4 weeks, Sept 2025", "test": "Test: 21 weeks, May to Sept 2026"}
 assert V3.name == "v3" and (V3 / "data_out").is_dir(), V3
 assert Path(common.OUT_DIR).resolve() == (V3 / "data_out").resolve(), common.OUT_DIR   # code really reads v3 data
@@ -74,7 +79,10 @@ profile = env_v3.get_profile()                       # naive seed 0
 panel = common.load_panel()
 dep_obs = panel.pivot(index="ts", columns="zone", values="dep").reindex(index=sim.hours, columns=range(Z)).values
 arr_obs = panel.pivot(index="ts", columns="zone", values="arr").reindex(index=sim.hours, columns=range(Z)).values
-actual = env_v3.get_actual()                         # (T, Z, 2) realised dep, arr (NaN -> 0)
+bikes_obs = panel.pivot(index="ts", columns="zone", values="bikes").reindex(index=sim.hours, columns=range(Z)).values.astype(float)
+cap_zone = panel.groupby("zone")["cap"].first().reindex(range(Z)).values.astype(float)   # constant per zone in the panel
+assert (panel.groupby("zone")["cap"].nunique() == 1).all() and (cap_zone > 0).all()
+actual = env_v3.get_actual()                        # (T, Z, 2) realised dep, arr (NaN -> 0)
 hist_occ = np.load(common.OUT_DIR / "hist_occ.npy")  # v3 hist_occ (also the default inside HourlyOcc / MPCController)
 
 
@@ -147,6 +155,10 @@ for p, P in periods.items():
     for name, j in (("dep_gru", 0), ("arr_gru", 1)):
         assert np.isfinite(gru[P["hours"]][..., j]).all(), (p, name, "GRU forecast has NaN inside the period")
         L[name] = mean_layer(gru[..., j], P)
+    # dock-level layers (version 2.1): dep / cap x 100 per zone-hour, and fill = bikes / cap (panel), same aggregation as dep
+    assert np.isfinite(bikes_obs[P["hours"]]).all(), (p, "bikes")
+    L["dep_per_dock"] = mean_layer(dep_obs / cap_zone[None, :] * 100.0, P)
+    L["fill"] = mean_layer(bikes_obs / cap_zone[None, :], P)
     P["trips_per_week"] = float(dep_obs[P["hours"]].sum() / len(P["starts"]))
     log(f"demand layers {p}: mean observed departures/week {P['trips_per_week']:.2f}")
 
@@ -217,6 +229,123 @@ for p, P in periods.items():
         totals[p][f"lost_oracle_b{b}"] = sum(r["weekly_each"])
         L[f"oracle_gain_b{b}"] = {d: L[f"lost_mpc_b{b}"][d] - L[f"lost_oracle_b{b}"][d] for d in DT}
 
+# ----------------------------------------------------------------------------- 4b. learned-policy (PPO) runs (version 2.1)
+# Each (period, budget, arch, seed) is one rollout of the selected checkpoint (argmax) through env_v3.CandidateEnv over the
+# period's weeks. Same construction as ppo_v3.evaluate_checkpoint / nb 34: CandidateEnv(split, budget_cycle=[b], forecast and
+# blind_zones from the checkpoint args, seed 999), one env for all weeks, action = argmax of the masked actor logits.
+# Per decision hour we log (before the env steps): the policy slot's own moves (cand["moves"][slot]: the part of the budget the
+# policy controls; the first 0.75 B "common" moves are the same for every slot) and the CONTINUE slot's moves (the leftover of the
+# full-MPC plan the policy could have continued). override and policy_net are built from those two lists:
+#   policy_net[z]  = bikes into z minus bikes out of z in the slot's own moves
+#   override[z]    = 1 if merged slot moves != merged CONTINUE moves AND (z is a source/destination of a slot move OR the net
+#                    flow at z differs from the CONTINUE net flow; the second part catches a policy that cancels MPC moves)
+_ppo_cache = {}
+PPO_SEL = {}
+
+
+def ppo_selected(arch, seed):
+    if (arch, seed) not in PPO_SEL:
+        sel = json.load(open(V3 / "runs" / f"selected_main_{arch}_s{seed}.json"))
+        ck = V3 / "runs" / Path(sel["checkpoint"]).name
+        assert ck.exists() and f"_u{sel['selected_update']}.pt" in ck.name, (arch, seed, ck)
+        PPO_SEL[(arch, seed)] = (sel, ck)
+    return PPO_SEL[(arch, seed)]
+
+
+def _net_flow(moves):
+    v = np.zeros(Z)
+    for i, j, n in moves:
+        v[j] += n
+        v[i] -= n
+    return v
+
+
+def run_ppo(p, arch, seed, b):
+    P = periods[p]
+    sel, ck_path = ppo_selected(arch, seed)
+    cp = CACHE_DIR / f"ppo_{p}_{arch}_s{seed}_b{b}.pkl"
+    if cp.exists() and not FRESH:
+        r = pickle.load(open(cp, "rb"))
+        if r["ckpt"] == ck_path.name:
+            log(f"{p:4s} PPO-{arch.upper()} s{seed} b{b}: from cache  lost/week {r['wk']:.2f}")
+            return r
+    import torch
+    torch.set_num_threads(1)
+    import ppo_v3 as PP
+    from env_v3 import CONTINUE, merge_moves
+    PP.load_env_impl("real")
+    net, ck = PP.load_policy(ck_path)
+    assert int(ck["update"]) == sel["selected_update"] and ck["arch"] == arch and ck["args"].get("seed") == seed
+    fc, bz = ck["args"].get("forecast", "gru_mean"), ck["args"].get("blind_zones")
+    assert fc == "gru_mean" and bz is None, (fc, bz)
+    env = env_v3.CandidateEnv(p, budget_cycle=(b,), forecast=fc, seed=999, blind_zones=bz)
+    assert list(env.starts) == list(P["starts"])
+    t0 = time.time()
+    lost_rows, ov_rows, pn_rows, weekly_each_, n_nonmpc, n_dec, n_cont_feas = [], [], [], [], 0, 0, 0
+    for wi, s in enumerate(P["starts"]):
+        t1 = time.time()
+        obs, done, wlost = env.reset(s, b), False, 0
+        while not done:
+            bt = PP.to_batch([obs])
+            with torch.no_grad():
+                a = int(net.logits(bt).argmax(-1))
+            c = env.cand
+            pol = merge_moves(c["moves"][a])
+            cont = merge_moves(c["moves"][CONTINUE])
+            net_pol = _net_flow(pol)
+            ov = np.zeros(Z)
+            if pol != cont:
+                ov[net_pol != _net_flow(cont)] = 1.0
+                for i, j, n in pol:
+                    ov[i] = ov[j] = 1.0
+            n_cont_feas += int(bool(c["mask"][CONTINUE]))
+            n_nonmpc += int(c["kind"][a] == 2)
+            n_dec += 1
+            h_dec = int(env.sim.h)
+            obs, _, done, info = env.step(a)
+            assert info["h"] == h_dec
+            wlost += info["lost"]
+            lost_rows.append((h_dec, np.asarray(info["lost_zone"], dtype=float)))
+            ov_rows.append((h_dec, ov))
+            pn_rows.append((h_dec, net_pol))
+        assert wlost == env.totals()["lost"] == int(env.week["lost_zone"].sum()), (wlost, env.totals()["lost"])
+        assert env.mpc_fail == 0
+        weekly_each_.append(int(wlost))
+        if len(P["starts"]) > 4 and (wi % 5 == 4 or wi == len(P["starts"]) - 1):
+            print(f"      week {wi:2d}  lost {wlost:5d}  ({time.time() - t1:.1f}s)", flush=True)
+    r = dict(lost=accumulate(lost_rows, P), override=accumulate(ov_rows, P, with_count=True),
+             policy_net=accumulate(pn_rows, P, with_count=True), wk=float(np.mean(weekly_each_)), weekly_each=weekly_each_,
+             wall=time.time() - t0, ckpt=ck_path.name, update=int(ck["update"]),
+             share_transfer=n_nonmpc / n_dec, share_cont_feasible=n_cont_feas / n_dec,
+             override_share_any=float(np.mean([v.max() for _, v in ov_rows])))
+    log(f"{p:4s} PPO-{arch.upper()} s{seed} b{b} (u{r['update']}): lost/week {r['wk']:9.2f}  wall {r['wall']:6.1f}s  weeks {weekly_each_}")
+    with open(cp, "wb") as f:
+        pickle.dump(r, f)
+    return r
+
+
+ppo_runs = {p: {} for p in periods}                  # p -> (arch, b, seed) -> result
+ppo_t0 = time.time()
+for p, P in periods.items():
+    for arch in PPO_ARCHS:
+        for b in BUDGETS:
+            for seed in PPO_SEEDS:
+                ppo_runs[p][(arch, b, seed)] = run_ppo(p, arch, seed, b)
+    L = layers[p]
+    for arch in PPO_ARCHS:
+        for b in BUDGETS:
+            rs = [ppo_runs[p][(arch, b, s)] for s in PPO_SEEDS]
+            L[f"lost_ppo_{arch}_b{b}"] = {d: np.mean([r["lost"][d] for r in rs], axis=0) for d in DT}
+            weekly[p][f"ppo_{arch}_b{b}"] = float(np.mean([r["wk"] for r in rs]))
+            weekly_each[p][f"ppo_{arch}_b{b}"] = list(np.mean([r["weekly_each"] for r in rs], axis=0))
+            totals[p][f"lost_ppo_{arch}_b{b}"] = float(np.mean([sum(r["weekly_each"]) for r in rs]))
+            if arch == "gnn":
+                L[f"ppo_gain_b{b}"] = {d: L[f"lost_mpc_b{b}"][d] - L[f"lost_ppo_gnn_b{b}"][d] for d in DT}
+                L[f"override_b{b}"] = {d: np.mean([r["override"][d] for r in rs], axis=0) for d in DT}
+                L[f"policy_net_b{b}"] = {d: np.mean([r["policy_net"][d] for r in rs], axis=0) for d in DT}
+if PPO_ARCHS:
+    log(f"PPO runs done; wall for the PPO block {time.time() - ppo_t0:.1f}s")
+
 # ----------------------------------------------------------------------------- 5. spot checks
 print("\n== spot checks (tolerance 0.5 trips) ==", flush=True)
 check_rows = []
@@ -256,6 +385,48 @@ if "test" in periods:
             bad = [(wi, int(a), c) for wi, (a, c) in enumerate(zip(g["lost"].values, weekly_each["test"][k])) if abs(a - c) > 0.5]
             if bad:
                 print(f"  per-week MISMATCH test {ctrl} b{b} (week, csv, got): {bad}")
+for arch in PPO_ARCHS:                                # PPO rows (version 2.1)
+    A = arch.upper()
+    if "test" in periods:
+        for b in BUDGETS:
+            for seed in PPO_SEEDS:
+                g = test_ev[(test_ev.controller == f"PPO_{A}") & (test_ev.arch == arch) & (test_ev.seed == seed)
+                            & (test_ev["mode"] == "argmax") & (test_ev.budget == b)].sort_values("week")
+                assert len(g) == 21 and list(g["start_h"]) == periods["test"]["starts"], (arch, seed, b)
+                assert (g["update"] == ppo_selected(arch, seed)[0]["selected_update"]).all()
+                got = ppo_runs["test"][(arch, b, seed)]["weekly_each"]
+                check("test", f"test_eval_v3 PPO_{A} s{seed} b{b} mean", float(g["lost"].mean()), float(np.mean(got)))
+                for wi, (a_, c_) in enumerate(zip(g["lost"].values, got)):
+                    check_rows.append(("test", f"PPO_{A} s{seed} b{b} week {wi}", float(a_), float(c_), abs(a_ - c_) <= 0.5))
+                bad = [(wi, int(a_), c_) for wi, (a_, c_) in enumerate(zip(g["lost"].values, got)) if abs(a_ - c_) > 0.5]
+                if bad:
+                    print(f"  per-week MISMATCH test PPO_{A} s{seed} b{b} (week, csv, got): {bad}")
+    if "val" in periods:                              # eval_main_<arch>_s<seed>.csv: one row per update x mode x budget, lost = mean over the 4 val weeks
+        for seed in PPO_SEEDS:
+            ev = pd.read_csv(V3 / "runs" / f"eval_main_{arch}_s{seed}.csv")
+            u = ppo_selected(arch, seed)[0]["selected_update"]
+            for b in BUDGETS:
+                row = ev[(ev["update"] == u) & (ev["mode"] == "argmax") & (ev.budget == b)]
+                assert len(row) == 1, (arch, seed, b, len(row))
+                got = ppo_runs["val"][(arch, b, seed)]["weekly_each"]
+                check("val", f"eval_main_{arch}_s{seed} u{u} b{b} mean", float(row["lost"].iloc[0]), float(np.mean(got)))
+                exp_w = [float(row[f"lost_w{k}"].iloc[0]) for k in range(1, 5)]
+                check_rows.append(("val", f"eval_main_{arch}_s{seed} b{b} weeks", sum(exp_w), float(sum(got)), abs(sum(exp_w) - sum(got)) <= 2.0))
+                if any(abs(a_ - c_) > 0.5 for a_, c_ in zip(exp_w, got)):
+                    print(f"  per-week MISMATCH val PPO_{A} s{seed} b{b} (csv, got): {exp_w} {got}")
+    if arch == "gnn" and "test" in periods:           # seed-mean vs the ladder already in map_data.json (PPO GNN [b20, b40])
+        for b, e in ((20, 1371.3), (40, 302.2)):
+            check("test", f"ladder PPO GNN seed-mean b{b}", e, weekly["test"][f"ppo_gnn_b{b}"], tol=0.5)
+for p in periods:
+    for b in BUDGETS:
+        for arch in PPO_ARCHS:
+            s = sum(layers[p][f"lost_ppo_{arch}_b{b}"][d].sum() * periods[p]["n_days"][d] for d in DT)
+            e = totals[p][f"lost_ppo_{arch}_b{b}"]
+            check_rows.append((p, f"layer sum lost_ppo_{arch}_b{b}", float(e), float(s), abs(s - e) <= 0.5))
+        if "gnn" in PPO_ARCHS:
+            s = sum(layers[p][f"ppo_gain_b{b}"][d].sum() * periods[p]["n_days"][d] for d in DT)
+            e = totals[p][f"lost_mpc_b{b}"] - totals[p][f"lost_ppo_gnn_b{b}"]
+            check_rows.append((p, f"layer sum ppo_gain_b{b}", float(e), float(s), abs(s - e) <= 0.5))
 for p in periods:
     for name, tot in totals[p].items():
         lay = layers[p][name]
@@ -407,6 +578,11 @@ for key, k20, k40 in (("none", "none", "none"), ("heur", "heur_b20", "heur_b40")
 # ----------------------------------------------------------------------------- 8. write
 layer_order = (["dep", "arr", "dep_gru", "arr_gru"]
                + [f"{n}_b{b}" for b in BUDGETS for n in ("lost_none", "lost_heur", "lost_mpc", "lost_oracle", "oracle_gain", "shortage", "overflow")])
+layer_order += ["dep_per_dock", "fill"]
+for b in BUDGETS:
+    layer_order += [f"lost_ppo_{a}_b{b}" for a in PPO_ARCHS]
+    if "gnn" in PPO_ARCHS:
+        layer_order += [f"{n}_b{b}" for n in ("ppo_gain", "override", "policy_net")]
 layers_json = {p: {k: {d: np.round(layers[p][k][d], 3).tolist() for d in DT} for k in layer_order} for p in ("val", "test")}
 
 meta = {
@@ -417,6 +593,10 @@ meta = {
     "horizon": HORIZON,
     "built": datetime.datetime.now().replace(microsecond=0).isoformat(),
 }
+if PPO_ARCHS:
+    meta["ppo"] = {f"{a}_checkpoints": [ppo_selected(a, s)[1].name for s in PPO_SEEDS] for a in PPO_ARCHS}
+    meta["ppo"].update({"seeds": PPO_SEEDS, "mode": "argmax",
+                        "selected_updates": {a: [ppo_selected(a, s)[0]["selected_update"] for s in PPO_SEEDS] for a in PPO_ARCHS}})
 map_data = {
     "meta": meta, "zones": zones_fc, "stations": stations, "edges": edges, "daytypes": DT, "layers": layers_json,
     "weekly": {p: {k: round(float(v), 3) for k, v in weekly[p].items()} for p in ("val", "test")},

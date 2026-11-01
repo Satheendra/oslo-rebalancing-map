@@ -2,6 +2,7 @@
 import json
 import math
 import random
+import sys
 from pathlib import Path
 
 random.seed(7)
@@ -133,12 +134,42 @@ for p in PERIODS:
         L["oracle_gain_b%d" % b] = g
         L["shortage_b%d" % b] = make(0.8 * f, 0.3, sparse=True)
         L["overflow_b%d" % b] = make(0.6 * f, 0.3, sparse=True)
+        # learned-policy layers (version 2.1): PPO-GNN slightly below MPC, PPO-MLP between MPC and PPO-GNN
+        mpc = L["lost_mpc_b%d" % b]
+        for key, shrink, spread in (("lost_ppo_gnn", 0.90, 0.3), ("lost_ppo_mlp", 0.95, 0.3)):
+            L["%s_b%d" % (key, b)] = {
+                dt: [[round(max(0.0, mpc[dt][z][h] * shrink * (1 + random.uniform(-spread, spread))), 3)
+                      for h in range(24)] for z in range(N)] for dt in ("wd", "we")}
+        gnn = L["lost_ppo_gnn_b%d" % b]
+        L["ppo_gain_b%d" % b] = {
+            dt: [[round(mpc[dt][z][h] - gnn[dt][z][h], 3) for h in range(24)] for z in range(N)]
+            for dt in ("wd", "we")}
+        # override share 0..0.6, higher at rush hours; policy_net -3..3 bikes per hour (sign flips by zone)
+        L["override_b%d" % b] = {
+            dt: [[round(min(0.6, max(0.0, 0.05 + 0.5 * zones_scale[z] / 2.2 * profile(h, dt) / 2.0
+                                      * (1 + random.uniform(-0.3, 0.3)))), 3) for h in range(24)] for z in range(N)]
+            for dt in ("wd", "we")}
+        sign = [random.choice((-1, 1)) for _ in range(N)]
+        L["policy_net_b%d" % b] = {
+            dt: [[round(max(-3.0, min(3.0, sign[z] * 2.2 * profile(h, dt) / 2.2 * zones_scale[z] / 1.5
+                                       + random.uniform(-0.3, 0.3))), 3) for h in range(24)] for z in range(N)]
+            for dt in ("wd", "we")}
+    # dock-level layers (version 2.1): per 100 docks and mean fill share
+    caps = [f["properties"]["cap"] or 1 for f in features]
+    L["dep_per_dock"] = {dt: [[round(L["dep"][dt][z][h] / caps[z] * 100, 3) for h in range(24)] for z in range(N)]
+                         for dt in ("wd", "we")}
+    L["fill"] = {dt: [[round(min(0.95, max(0.05, 0.55 - 0.18 * (profile(h, dt) - 0.5) * (1 if z % 2 else -1)
+                                           + 0.2 * (zones_scale[z] - 1.3) / 1.0 * 0.5
+                                           + random.uniform(-0.05, 0.05))), 3) for h in range(24)] for z in range(N)]
+                 for dt in ("wd", "we")}
     layers[p] = L
     w = {"none": round(6118.0 * lf, 1)}
     for b, bf in ((40, 1.0), (20, 1.8)):
         w["heur_b%d" % b] = round(1016.25 * bf * lf, 1)
         w["mpc_b%d" % b] = round(115.25 * bf * lf, 1)
         w["oracle_b%d" % b] = round(33.25 * bf * lf, 1)
+        w["ppo_gnn_b%d" % b] = round(w["mpc_b%d" % b] * 0.9, 1)
+        w["ppo_mlp_b%d" % b] = round(w["mpc_b%d" % b] * 0.95, 1)
     weekly[p] = w
     trips_per_week[p] = round(32400.0 * df, 1)
 
@@ -170,6 +201,7 @@ data = {
         "budgets_run": BUDGETS_RUN,
         "horizon": 6,
         "built": "2026-11-01T21:30:00",
+        "ppo": {"gnn_checkpoints": ["fixture"], "mlp_checkpoints": ["fixture"], "seeds": [0, 1, 2], "mode": "argmax"},
     },
     "zones": {"type": "FeatureCollection", "features": features},
     "stations": stations,
@@ -181,6 +213,10 @@ data = {
     "ladder": ladder,
 }
 
+# optional first argument: output folder (so the fixture can be written outside the repo)
+if len(sys.argv) > 1:
+    DATA_DIR = Path(sys.argv[1])
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 out = DATA_DIR / "fixture_data.json"
 out.write_text(json.dumps(data, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
 print("wrote", out, out.stat().st_size, "bytes")

@@ -224,12 +224,28 @@ const LAYER_INFO = {
                  about: 'What the GRU forecast model expects for departures, using only data from before each hour. Compare it with the real departures to see where the forecast is off.' },
   arr_gru:     { label: 'GRU forecast arrivals', unit: 'trips per hour', family: 'demand', budget: false,
                  about: 'What the GRU forecast model expects for arrivals, using only data from before each hour. Compare it with the real arrivals to see where the forecast is off.' },
+  dep_per_dock: { label: 'Departures per 100 docks', unit: 'trips per hour per 100 docks', family: 'demand', budget: false,
+                 about: 'Departures per hour divided by the number of docks in the zone, times 100. A big zone can have many trips just because it has many docks. This layer removes that effect, so you see how hard each dock is worked. Darker blue means each dock is used more.' },
+  fill:        { label: 'Mean fill', unit: 'share of docks with a bike', family: 'fill', budget: false,
+                 fixed: [0.2, 0.3, 0.4, 0.5, 0.6],
+                 about: 'The average share of docks that hold a bike at the start of the hour, from the real trip history. 0 means every dock is empty and 1 means every dock is full. Pale zones are often empty. Dark green zones are mostly full. The colour classes are fixed, so both periods can be compared.' },
   lost_none:   { label: 'No rebalancing', unit: 'trips per hour', family: 'lost', budget: true,
                  about: 'A lost trip is a rider who wants a bike but finds the station empty, or wants to return a bike but finds it full. This is the number of lost trips per hour if no trucks move any bikes.' },
   lost_heur:   { label: 'Hourly occupancy rule', unit: 'trips per hour', family: 'lost', budget: true,
                  about: 'Lost trips per hour when trucks follow a simple rule that looks only at how full each zone is now. It does not use any forecast. The truck budget limits how many bikes can be moved.' },
   lost_mpc:    { label: 'MPC with GRU forecast', unit: 'trips per hour', family: 'lost', budget: true,
                  about: 'Lost trips per hour when trucks are planned several hours ahead (MPC, a plan that is re-made every hour) using the GRU forecast. Lower values mean the plan keeps more riders served.' },
+  lost_ppo_gnn: { label: 'Lost trips, PPO-GNN policy', unit: 'trips per hour', family: 'lost', budget: true, scaleFrom: 'lost_mpc',
+                 about: 'Lost trips per hour when a learned policy controls part of the truck budget on top of the MPC plan. PPO is the reinforcement-learning method that trained the policy to pick among candidate actions. GNN means the policy reads the zones through a graph neural network, which passes information along the zone graph (the links between neighbouring zones). The colour classes are the same as for "MPC with GRU forecast", so you can compare the two maps by eye. Mean of three training seeds.' },
+  lost_ppo_mlp: { label: 'Lost trips, PPO-MLP policy', unit: 'trips per hour', family: 'lost', budget: true, scaleFrom: 'lost_mpc',
+                 about: 'Lost trips per hour for the PPO policy that uses a plain MLP (a simple neural network that looks at each zone on its own, not at its neighbours). PPO is the reinforcement-learning method that trained a policy to pick among candidate actions for part of the truck budget, on top of the MPC plan. Same colour classes as "MPC with GRU forecast". Mean of three seeds.' },
+  ppo_gain:    { label: 'PPO-GNN gain over MPC', unit: 'trips per hour', family: 'diverging', budget: true,
+                 about: 'Lost trips under full MPC minus lost trips under the PPO-GNN policy (PPO is the learned policy, GNN is the graph neural network it uses). Red zones are where the policy lost fewer trips than the MPC plan. Blue zones are where it lost more. Values are small, so look for patterns across zones and hours, not single cells.' },
+  override:    { label: 'Where the policy overrides the plan', unit: 'share of decision hours', family: 'override', budget: true,
+                 fixed: [0.05, 0.1, 0.2, 0.3, 0.5],
+                 about: 'The share of decision hours in which the PPO-GNN policy moved bikes into or out of this zone in a way that differs from the MPC moves it would otherwise have carried out. 0 means the policy never changed anything here. Dark purple zones are where the policy departs most from the MPC plan.' },
+  policy_net:  { label: 'Policy net moves', unit: 'bikes per hour', family: 'diverging', budget: true,
+                 about: 'Net bikes per hour that the PPO-GNN policy moves into a zone (red) or out of it (blue), counting only the part of the truck budget the policy controls. Red zones are where the policy brings bikes in. Blue zones are where it takes bikes out. Pale zones are where it moves little.' },
   shortage:    { label: 'MPC predicted shortage', unit: 'bikes', family: 'shortage', budget: true,
                  about: 'How many bikes the MPC plan expects a zone to be short of in the next hour. Dark red zones are where the plan wants to bring bikes in.' },
   overflow:    { label: 'MPC predicted overflow', unit: 'bikes', family: 'overflow', budget: true,
@@ -238,8 +254,9 @@ const LAYER_INFO = {
                  about: 'Lost trips with the GRU forecast minus lost trips with a perfect forecast (the realised demand for every plan hour, as in the paper). Red zones are where a better forecast would help most. Blue zones are where the perfect forecast did slightly worse.' }
 };
 const LAYER_GROUPS = [
-  { title: 'Expected demand', ids: ['dep', 'arr', 'dep_gru', 'arr_gru'] },
+  { title: 'Expected demand', ids: ['dep', 'arr', 'dep_per_dock', 'fill', 'dep_gru', 'arr_gru'] },
   { title: 'Unmet demand (lost trips per hour)', ids: ['lost_none', 'lost_heur', 'lost_mpc'] },
+  { title: 'Learned policy (PPO)', ids: ['lost_ppo_gnn', 'lost_ppo_mlp', 'ppo_gain', 'override', 'policy_net'] },
   { title: 'Rebalancing pressure', ids: ['shortage', 'overflow', 'oracle_gain'] }
 ];
 const PALETTES = {
@@ -247,6 +264,8 @@ const PALETTES = {
   lost:      ['#fff5eb', '#fdd0a2', '#fdae6b', '#fd8d3c', '#e6550d', '#a63603'],
   shortage:  ['#fee5d9', '#fcbba1', '#fc9272', '#fb6a4a', '#de2d26', '#a50f15'],
   overflow:  ['#f2f0f7', '#dadaeb', '#bcbddc', '#9e9ac8', '#756bb1', '#54278f'],
+  override:  ['#f7f4fa', '#e0d8ec', '#c4b5dc', '#a08fc6', '#7b5fa8', '#4a1486'],
+  fill:      ['#f7fcf5', '#d3eecd', '#a1d99b', '#6bbf74', '#31a354', '#006d2c'],
   diverging: ['#2166ac', '#67a9cf', '#d1e5f0', '#fddbc7', '#ef8a62', '#b2182b']
 };
 const ACCENT = '#1d6fa5';
@@ -323,7 +342,17 @@ const breaksCache = {};
 function getScale(id, budget) {
   const ck = dataKey(id, budget);
   if (breaksCache[ck]) return breaksCache[ck];
-  const fam = LAYER_INFO[id].family;
+  const info = LAYER_INFO[id], fam = info.family;
+  // fixed class edges (fill, override): the same classes for every period and budget
+  if (info.fixed) {
+    breaksCache[ck] = { diverging: false, step: null, edges: info.fixed.slice(), colors: PALETTES[fam] };
+    return breaksCache[ck];
+  }
+  // learned-policy lost-trip layers borrow the MPC breaks so the maps can be compared by eye
+  if (info.scaleFrom && layerData(info.scaleFrom, budget)) {
+    breaksCache[ck] = getScale(info.scaleFrom, budget);
+    return breaksCache[ck];
+  }
   const vals = [];
   // breaks use BOTH periods, both day types and all hours, so the two periods are comparable
   PERIOD_KEYS.forEach(function (p) {
@@ -436,6 +465,7 @@ function sparkSvg(zone) {
   s += '<line x1="' + ml + '" y1="' + sy(0) + '" x2="' + (W - mr) + '" y2="' + sy(0) + '" stroke="#d5d8dc"/>';
   s += '<text x="' + (ml - 4) + '" y="' + (mt + 8) + '" text-anchor="end" font-size="9" fill="#6b7280">' + fmtNum(parseFloat(hi.toPrecision(2))) + '</text>';
   s += '<text x="' + (ml - 4) + '" y="' + (sy(0) + 3) + '" text-anchor="end" font-size="9" fill="#6b7280">0</text>';
+  if (lo < 0) s += '<text x="' + (ml - 4) + '" y="' + (mt + ph + 3) + '" text-anchor="end" font-size="9" fill="#6b7280">' + fmtNum(parseFloat(lo.toPrecision(2))) + '</text>';
   [0, 6, 12, 18, 23].forEach(function (h) {
     s += '<text x="' + sx(h) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="9" fill="#6b7280">' + pad2(h) + '</text>';
   });
@@ -592,15 +622,22 @@ function renderHeadline() {
   const w = (DATA.weekly && DATA.weekly[p]) || {};
   const get = function (k) { const v = w[k]; return v === undefined ? null : v; };
   const none = get('none'), heur = get('heur_b' + b), mpc = get('mpc_b' + b), orc = get('oracle_b' + b);
+  const pg = get('ppo_gnn_b' + b), pm = get('ppo_mlp_b' + b);      // null until the learned-policy data is in
   const tpw = DATA.trips_per_week ? DATA.trips_per_week[p] : null;
   const sl = (mpc !== null && tpw) ? (1 - mpc / tpw) * 100 : null;
+  const slg = (pg !== null && tpw) ? (1 - pg / tpw) * 100 : null;
+  const row = function (label, v) { return '<tr><td>' + label + '</td><td class="num">' + fmtInt(v) + '</td></tr>'; };
   const h = '<table>' +
     '<tr><td colspan="2" class="note" style="margin:0 0 4px">Lost trips per week, ' + b + ' trucks, ' + esc(PERIOD_SHORT[p] || periodLabel(p)) + '</td></tr>' +
-    '<tr><td>No rebalancing</td><td class="num">' + fmtInt(none) + '</td></tr>' +
-    '<tr><td>Hourly occupancy rule</td><td class="num">' + fmtInt(heur) + '</td></tr>' +
-    '<tr><td>MPC, GRU forecast</td><td class="num">' + fmtInt(mpc) + '</td></tr>' +
-    '<tr><td>MPC, perfect forecast</td><td class="num">' + fmtInt(orc) + '</td></tr>' +
-    '<tr class="hl"><td>Service level (MPC, GRU)</td><td class="num">' + (sl === null ? 'n/a' : sl.toFixed(1) + ' %') + '</td></tr></table>';
+    row('No rebalancing', none) +
+    row('Hourly occupancy rule', heur) +
+    row('MPC, GRU forecast', mpc) +
+    (pm !== null ? row('PPO-MLP policy', pm) : '') +
+    (pg !== null ? row('PPO-GNN policy', pg) : '') +
+    row('MPC, perfect forecast', orc) +
+    '<tr class="hl"><td>Service level (MPC, GRU)</td><td class="num">' + (sl === null ? 'n/a' : sl.toFixed(1) + ' %') + '</td></tr>' +
+    (pg !== null ? '<tr><td>Service level (PPO-GNN)</td><td class="num">' + (slg === null ? 'n/a' : slg.toFixed(1) + ' %') + '</td></tr>' : '') +
+    '</table>';
   $('headline').innerHTML = h;
 }
 

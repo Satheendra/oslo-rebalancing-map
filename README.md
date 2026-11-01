@@ -31,8 +31,9 @@ Open it in a browser. No server is needed; the page is one file with the data in
 
 | Layer group | Layers | Where the numbers come from |
 |---|---|---|
-| Expected demand | departures, arrivals, GRU forecast of each | the real trips; the GRU forecaster (mean of three seeds) that fed the planner |
+| Expected demand | departures, arrivals, departures per 100 docks, mean fill, GRU forecast of departures and arrivals | the real trips; departures divided by zone capacity (per 100 docks); the share of docks holding a bike at the start of the hour (mean fill, 0 to 1, fixed colour classes); the GRU forecaster (mean of three seeds) that fed the planner |
 | Unmet demand | lost trips per hour under no rebalancing, the hourly occupancy rule, and the full MPC planner | replay of the real trips in the simulator |
+| Learned policy (PPO) | lost trips under the PPO-GNN policy and the PPO-MLP policy (same colour classes as the MPC map, so they compare by eye); the PPO-GNN gain over MPC (red: the policy lost fewer trips than full MPC, blue: more); where the policy overrides the plan (share of decision hours in which its moves touched the zone and differed from the MPC moves); the policy's net moves (red: bikes brought in, blue: bikes taken out) | the same replay with the trained PPO policies (argmax, selected checkpoint of each seed, mean of three seeds); the PPO-MLP layer and the PPO rows of the headline box show only if the data file has them |
 | Rebalancing pressure | the MPC's predicted shortage and overflow per zone; the oracle gain | the MPC plan each hour; lost trips with the GRU forecast minus lost trips with a perfect forecast (realised demand for every plan hour, as in the paper) |
 | Controller ladder (chart) | lost trips per week for no rebalancing, the hourly rule, full MPC, the PPO policies (MLP and GNN encoders) and the MPC with a perfect forecast, at budget 20 or 40 | the paper's table of controller means on the test weeks; the reference runs on the validation weeks |
 
@@ -66,7 +67,10 @@ choose among candidate actions for part of the truck budget, on top of the MPC p
 
 ## Scope and caveats
 
-- Oslo only. The PPO policies are not drawn on the map yet; they appear in the ladder chart only.
+- Oslo only. The PPO policies are drawn in the "Learned policy (PPO)" layers and appear in the ladder chart
+  and headline box. The policy controls only part of the truck budget; the rest is the MPC plan, so the
+  policy layers show a small change from the MPC maps, and single zone-hours are noisy. Layers whose data
+  are missing from the data file are greyed out in the layer list.
 - Lost trips per zone-hour are small for the MPC (often under 1 per hour); the colour scale is fixed
   per layer across both periods so hours and periods can be compared, which makes most MPC cells look
   pale on purpose.

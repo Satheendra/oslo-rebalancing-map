@@ -7,7 +7,7 @@ in an Oslo Trip-Replay Simulator* (AMI23G, Högskolan Dalarna, 2026).
 
 ## Interactive map
 
-**[View the map](https://satheendra.github.io/AMI23G_Oslo_Rebalancing_Map/)**
+**[View the map](https://satheendra.github.io/oslo-rebalancing-map/)**
 
 ![Weekday departures at 08:00](docs/screenshot_departures_weekday_08.jpg)
 

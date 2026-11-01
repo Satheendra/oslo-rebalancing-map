@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oslo demand and rebalancing map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+:root {
+  --accent: #1d6fa5;
+  --accent-soft: #e6f0f7;
+  --ink: #2b2f36;
+  --muted: #6b7280;
+  --line: #e3e5e8;
+  --bg: #f5f6f7;
+  --bar-h: 58px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink); background: var(--bg); font-size: 13px; line-height: 1.4;
+  display: flex; overflow: hidden;
+}
+#panel {
+  width: 330px; flex: 0 0 330px; height: 100%; background: #fff; border-right: 1px solid var(--line);
+  overflow-y: auto; padding: 18px 18px 24px; z-index: 1200;
+}
+#main { flex: 1 1 auto; min-width: 0; height: 100%; display: flex; flex-direction: column; position: relative; }
+#map { flex: 1 1 auto; min-height: 0; background: #e9ecef; }
+h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
+.sub { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.group { margin: 0 0 14px; }
+.group h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 0 0 6px; font-weight: 600;
+}
+.group h3 { font-size: 12px; font-weight: 600; margin: 10px 0 3px; color: var(--ink); }
+.group h3:first-of-type { margin-top: 0; }
+.radio { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.radio:hover { background: var(--bg); }
+.radio input { accent-color: var(--accent); margin: 0; }
+.radio.disabled { opacity: .4; cursor: not-allowed; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button {
+  font: inherit; border: 0; background: #fff; padding: 6px 16px; cursor: pointer; color: var(--ink);
+  border-right: 1px solid var(--line);
+}
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--accent); color: #fff; }
+.seg button:hover:not(.on) { background: var(--bg); }
+.box { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.box table { width: 100%; border-collapse: collapse; }
+.box td { padding: 2px 0; }
+.box td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.box tr.hl td { color: var(--accent); border-top: 1px solid var(--line); padding-top: 5px; }
+.note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+#chart svg { width: 100%; height: auto; display: block; }
+#chart .legend { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+#chart .legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+#about p { margin: 0; color: #444; }
+#about .foot { margin-top: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 8px; }
+#bar {
+  flex: 0 0 var(--bar-h); height: var(--bar-h); background: #fff; border-top: 1px solid var(--line);
+  display: flex; align-items: center; gap: 14px; padding: 0 18px; z-index: 1100;
+}
+#play {
+  width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--accent); background: #fff;
+  color: var(--accent); cursor: pointer; font-size: 13px; padding: 0; flex: 0 0 auto;
+}
+#play.on { background: var(--accent); color: #fff; }
+#hour { flex: 1 1 auto; accent-color: var(--accent); min-width: 0; }
+#hourlabel { flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 600; min-width: 108px; text-align: right; }
+#menubtn {
+  display: none; position: absolute; top: 10px; left: 10px; z-index: 1150; background: #fff; border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.15);
+}
+.legendbox {
+  background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12); font-size: 11px; line-height: 1.5;
+}
+.legendbox .t { font-weight: 600; margin-bottom: 3px; max-width: 190px; }
+.legendbox .u { color: var(--muted); margin-bottom: 4px; }
+.legendbox .row { display: flex; align-items: center; gap: 7px; }
+.legendbox .sw { width: 22px; height: 12px; border: 1px solid rgba(0,0,0,.15); display: inline-block; }
+.leaflet-tooltip { font-size: 12px; line-height: 1.4; }
+.pop { font-size: 12px; }
+.pop b { font-size: 13px; }
+.pop .k { color: var(--muted); }
+.pop svg { display: block; margin-top: 4px; }
+@media (max-width: 799px) {
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; width: min(330px, 88vw); transform: translateX(-100%); transition: transform .2s; box-shadow: 2px 0 10px rgba(0,0,0,.2); }
+  body.open #panel { transform: none; }
+  #menubtn { display: block; }
+  body.open #menubtn { left: calc(min(330px, 88vw) + 10px); }
+  #hourlabel { min-width: 96px; }
+}
+</style>
+</head>
+<body>
+<aside id="panel">
+  <h1 id="title"></h1>
+  <p class="sub" id="subtitle"></p>
+
+  <div class="group" id="layers"><h2>Layer</h2></div>
+
+  <div class="group">
+    <h2>Truck budget</h2>
+    <div class="seg" id="budgets"></div>
+    <div class="note" id="budnote"></div>
+  </div>
+
+  <div class="group">
+    <h2>Day type</h2>
+    <div class="seg" id="daytype">
+      <button data-dt="wd" class="on">Weekday</button><button data-dt="we">Weekend</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <h2>Headline</h2>
+    <div class="box" id="headline"></div>
+  </div>
+
+  <div class="group">
+    <h2>Trucks versus service level</h2>
+    <div id="chart"></div>
+  </div>
+
+  <div class="group" id="about">
+    <h2>About</h2>
+    <p id="abouttext"></p>
+    <div class="foot">Oslo prototype. Validation weeks only. Data: Oslo Bysykkel trips, 30 zones.</div>
+  </div>
+</aside>
+
+<div id="main">
+  <button id="menubtn" type="button">Menu</button>
+  <div id="map"></div>
+  <div id="bar">
+    <button id="play" type="button" title="Play / pause">&#9654;</button>
+    <input type="range" id="hour" min="0" max="23" step="1" value="8" aria-label="Hour of day">
+    <div id="hourlabel"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const DATA = __DATA__;
+
+// ---------------------------------------------------------------- layer info
+// id -> label, unit, family, about. "budget": true when the data key carries a _bXX suffix.
+const LAYER_INFO = {
+  dep:         { label: 'Departures', unit: 'trips per hour', family: 'demand', budget: false,
+                 about: 'How many bike trips start in each zone per hour, on average, in the four validation weeks. Darker blue means more trips leave from that zone.' },
+  arr:         { label: 'Arrivals', unit: 'trips per hour', family: 'demand', budget: false,
+                 about: 'How many bike trips end in each zone per hour, on average. Darker blue means more bikes arrive there.' },
+  dep_gru:     { label: 'GRU forecast departures', unit: 'trips per hour', family: 'demand', budget: false,
+                 about: 'What the GRU forecast model expects for departures, using only data from before each hour. Compare it with the real departures to see where the forecast is off.' },
+  arr_gru:     { label: 'GRU forecast arrivals', unit: 'trips per hour', family: 'demand', budget: false,
+                 about: 'What the GRU forecast model expects for arrivals, using only data from before each hour. Compare it with the real arrivals to see where the forecast is off.' },
+  lost_none:   { label: 'No rebalancing', unit: 'trips per hour', family: 'lost', budget: true,
+                 about: 'A lost trip is a rider who wants a bike but finds the station empty, or wants to return a bike but finds it full. This is the number of lost trips per hour if no trucks move any bikes.' },
+  lost_heur:   { label: 'Hourly occupancy rule', unit: 'trips per hour', family: 'lost', budget: true,
+                 about: 'Lost trips per hour when trucks follow a simple rule that looks only at how full each zone is now. It does not use any forecast. The truck budget limits how many bikes can be moved.' },
+  lost_mpc:    { label: 'MPC with GRU forecast', unit: 'trips per hour', family: 'lost', budget: true,
+                 about: 'Lost trips per hour when trucks are planned several hours ahead (MPC, a plan that is re-made every hour) using the GRU forecast. Lower values mean the plan keeps more riders served.' },
+  shortage:    { label: 'MPC predicted shortage', unit: 'bikes', family: 'shortage', budget: true,
+                 about: 'How many bikes the MPC plan expects a zone to be short of in the next hour. Dark red zones are where the plan wants to bring bikes in.' },
+  overflow:    { label: 'MPC predicted overflow', unit: 'bikes', family: 'overflow', budget: true,
+                 about: 'How many bikes the MPC plan expects a zone to have too many of in the next hour, so riders could not return a bike. Dark purple zones are where the plan wants to take bikes out.' },
+  oracle_gain: { label: 'Oracle gain', unit: 'trips per hour', family: 'diverging', budget: true,
+                 about: 'Lost trips with the GRU forecast minus lost trips with a perfect forecast of the next hour. Red zones are where a better forecast would help most. Blue zones are where the perfect forecast did slightly worse.' }
+};
+const LAYER_GROUPS = [
+  { title: 'Expected demand', ids: ['dep', 'arr', 'dep_gru', 'arr_gru'] },
+  { title: 'Unmet demand (lost trips per hour)', ids: ['lost_none', 'lost_heur', 'lost_mpc'] },
+  { title: 'Rebalancing pressure', ids: ['shortage', 'overflow', 'oracle_gain'] }
+];
+const PALETTES = {
+  demand:    ['#eff3ff', '#c6dbef', '#9ecae1', '#6baed6', '#3182bd', '#08519c'],
+  lost:      ['#fff5eb', '#fdd0a2', '#fdae6b', '#fd8d3c', '#e6550d', '#a63603'],
+  shortage:  ['#fee5d9', '#fcbba1', '#fc9272', '#fb6a4a', '#de2d26', '#a50f15'],
+  overflow:  ['#f2f0f7', '#dadaeb', '#bcbddc', '#9e9ac8', '#756bb1', '#54278f'],
+  diverging: ['#2166ac', '#67a9cf', '#d1e5f0', '#fddbc7', '#ef8a62', '#b2182b']
+};
+const ACCENT = '#1d6fa5';
+const SERIES = [
+  { k: 'heuristic',  label: 'Hourly heuristic',        color: '#8a8f98', dash: '' },
+  { k: 'lp_gru',     label: 'Old LP',                  color: '#d64545', dash: '' },
+  { k: 'mpc_gru',    label: 'MPC, GRU forecast',       color: '#1d6fa5', dash: '' },
+  { k: 'mpc_oracle', label: 'MPC, perfect forecast',   color: '#1d6fa5', dash: '6 3' }
+];
+
+// ---------------------------------------------------------------- state
+const META = DATA.meta;
+const BUDGETS_RUN = META.budgets_run || [];
+const state = {
+  layer: 'dep',
+  dt: 'wd',
+  hour: 8,
+  budget: BUDGETS_RUN.length ? BUDGETS_RUN[0] : null,   // budget shown in headline/chart
+  mapBudget: BUDGETS_RUN.length ? BUDGETS_RUN[0] : null, // budget used for map layers
+  openZone: null,
+  timer: null
+};
+
+function $(id) { return document.getElementById(id); }
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function hourText(h) { return pad2(h) + ':00-' + pad2((h + 1) % 24) + ':00'; }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// ---------------------------------------------------------------- data access
+function dataKey(id, budget) {
+  return LAYER_INFO[id].budget ? id + '_b' + budget : id;
+}
+function layerData(id, budget) {
+  let d = DATA.layers[dataKey(id, budget)];
+  if (!d && id === 'lost_none') {          // budget irrelevant for this layer: use any budget key
+    for (let i = 0; i < BUDGETS_RUN.length && !d; i++) d = DATA.layers['lost_none_b' + BUDGETS_RUN[i]];
+  }
+  return d || null;
+}
+function value(id, budget, dt, zone, hour) {
+  const d = layerData(id, budget);
+  if (!d || !d[dt] || !d[dt][zone]) return null;
+  const v = d[dt][zone][hour];
+  return v === undefined ? null : v;
+}
+function layerAvailable(id) { return !!layerData(id, state.mapBudget); }
+
+// ---------------------------------------------------------------- breaks and colours
+function niceStep(x) {
+  if (!(x > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / p;
+  const n = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+  return n * p;
+}
+function fmtNum(v) {
+  if (v === 0) return '0';
+  for (let d = 0; d <= 4; d++) {
+    const s = v.toFixed(d);
+    if (Math.abs(parseFloat(s) - v) < 1e-9) return s;
+  }
+  return v.toFixed(2);
+}
+function percentile(sorted, q) {
+  if (!sorted.length) return 0;
+  const idx = (sorted.length - 1) * q, lo = Math.floor(idx), hi = Math.ceil(idx);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+const breaksCache = {};
+function getScale(id, budget) {
+  const ck = dataKey(id, budget);
+  if (breaksCache[ck]) return breaksCache[ck];
+  const d = layerData(id, budget);
+  const fam = LAYER_INFO[id].family;
+  const vals = [];
+  if (d) {
+    ['wd', 'we'].forEach(function (dt) {
+      if (!d[dt]) return;
+      d[dt].forEach(function (row) { row.forEach(function (v) { if (v !== null && isFinite(v)) vals.push(fam === 'diverging' ? Math.abs(v) : v); }); });
+    });
+  }
+  vals.sort(function (a, b) { return a - b; });
+  let p95 = percentile(vals, 0.95);
+  if (!(p95 > 0)) p95 = vals.length ? vals[vals.length - 1] : 0;   // sparse layers: fall back to max
+  let scale;
+  if (fam === 'diverging') {
+    const s = niceStep(p95 / 3);
+    scale = { diverging: true, step: s, edges: [-2 * s, -s, 0, s, 2 * s], colors: PALETTES.diverging };
+  } else {
+    const s = niceStep(p95 / 6);
+    scale = { diverging: false, step: s, edges: [s, 2 * s, 3 * s, 4 * s, 5 * s], colors: PALETTES[fam] };
+  }
+  breaksCache[ck] = scale;
+  return scale;
+}
+function classOf(scale, v) {
+  let i = 0;
+  while (i < scale.edges.length && v >= scale.edges[i]) i++;
+  return i;
+}
+function colorFor(scale, v) {
+  if (v === null || !isFinite(v)) return '#dddddd';
+  return scale.colors[classOf(scale, v)];
+}
+function classLabels(scale) {
+  const e = scale.edges, out = [];
+  out.push('< ' + fmtNum(e[0]));
+  for (let i = 0; i < e.length - 1; i++) out.push(fmtNum(e[i]) + ' to ' + fmtNum(e[i + 1]));
+  out.push('≥ ' + fmtNum(e[e.length - 1]));
+  if (!scale.diverging) { out[0] = '0 to ' + fmtNum(e[0]); }
+  return out;
+}
+function fmtVal(v) {
+  if (v === null || v === undefined || !isFinite(v)) return 'n/a';
+  const a = Math.abs(v);
+  return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+
+// ---------------------------------------------------------------- map
+const zonesGeo = DATA.zones;
+const featById = {};
+zonesGeo.features.forEach(function (f) { featById[f.properties.zone] = f; });
+
+const map = L.map('map', { zoomControl: true, preferCanvas: false });
+// Standard OpenStreetMap tiles (no API key). The polygons are drawn at 0.7 opacity so streets show through.
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
+}).addTo(map);
+
+function currentScale() { return getScale(state.layer, state.mapBudget); }
+function zoneValue(zone) { return value(state.layer, state.mapBudget, state.dt, zone, state.hour); }
+function styleFor(feature) {
+  const v = zoneValue(feature.properties.zone);
+  return { fillColor: colorFor(currentScale(), v), fillOpacity: 0.7, color: '#ffffff', weight: 1.2, opacity: 1 };
+}
+function tooltipHtml(zone) {
+  const p = featById[zone].properties, info = LAYER_INFO[state.layer], v = zoneValue(zone);
+  return '<b>Zone ' + zone + '</b><br>Capacity ' + p.cap + ' bikes, ' + p.n_stations + ' stations<br>' +
+    esc(info.label) + ': <b>' + fmtVal(v) + '</b> ' + esc(info.unit) + ' (' + hourText(state.hour) + ')';
+}
+function sparkSvg(zone) {
+  const W = 250, H = 96, ml = 28, mr = 6, mt = 6, mb = 18;
+  const d = layerData(state.layer, state.mapBudget);
+  if (!d) return '';
+  const pw = W - ml - mr, ph = H - mt - mb;
+  let lo = 0, hi = 0;
+  ['wd', 'we'].forEach(function (dt) { d[dt][zone].forEach(function (v) { if (v > hi) hi = v; if (v < lo) lo = v; }); });
+  if (hi === lo) hi = lo + 1;
+  const sx = function (h) { return ml + pw * h / 23; };
+  const sy = function (v) { return mt + ph * (1 - (v - lo) / (hi - lo)); };
+  let s = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">';
+  s += '<line x1="' + ml + '" y1="' + sy(0) + '" x2="' + (W - mr) + '" y2="' + sy(0) + '" stroke="#d5d8dc"/>';
+  s += '<text x="' + (ml - 4) + '" y="' + (mt + 8) + '" text-anchor="end" font-size="9" fill="#6b7280">' + fmtNum(parseFloat(hi.toPrecision(2))) + '</text>';
+  s += '<text x="' + (ml - 4) + '" y="' + (sy(0) + 3) + '" text-anchor="end" font-size="9" fill="#6b7280">0</text>';
+  [0, 6, 12, 18, 23].forEach(function (h) {
+    s += '<text x="' + sx(h) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="9" fill="#6b7280">' + pad2(h) + '</text>';
+  });
+  s += '<line x1="' + sx(state.hour) + '" y1="' + mt + '" x2="' + sx(state.hour) + '" y2="' + (mt + ph) + '" stroke="#bbb" stroke-dasharray="3 2"/>';
+  const line = function (dt, color) {
+    const pts = d[dt][zone].map(function (v, h) { return sx(h).toFixed(1) + ',' + sy(v).toFixed(1); }).join(' ');
+    return '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="' + (dt === state.dt ? 2.2 : 1.4) + '"/>';
+  };
+  s += line('we', '#9aa0a8') + line('wd', ACCENT);
+  const cv = d[state.dt][zone][state.hour];
+  s += '<circle cx="' + sx(state.hour) + '" cy="' + sy(cv) + '" r="3.5" fill="' + (state.dt === 'wd' ? ACCENT : '#9aa0a8') + '"/>';
+  s += '</svg>';
+  return s;
+}
+function popupHtml(zone) {
+  const p = featById[zone].properties, info = LAYER_INFO[state.layer], v = zoneValue(zone);
+  return '<div class="pop"><b>Zone ' + zone + '</b> <span class="k">cap ' + p.cap + ', ' + p.n_stations + ' stations</span><br>' +
+    esc(info.label) + ' at ' + hourText(state.hour) + ': <b>' + fmtVal(v) + '</b> ' + esc(info.unit) + '<br>' +
+    sparkSvg(zone) +
+    '<span class="k"><span style="color:' + ACCENT + '">&#9644;</span> weekday &nbsp; <span style="color:#9aa0a8">&#9644;</span> weekend (' + esc(info.unit) + ')</span></div>';
+}
+
+const zoneLayers = {};
+const geoLayer = L.geoJSON(zonesGeo, {
+  style: styleFor,
+  onEachFeature: function (feature, layer) {
+    const z = feature.properties.zone;
+    zoneLayers[z] = layer;
+    layer.bindTooltip(function () { return tooltipHtml(z); }, { sticky: true });
+    layer.bindPopup(function () { return popupHtml(z); }, { maxWidth: 300 });
+    layer.on('mouseover', function () { layer.setStyle({ weight: 3, color: '#333' }); layer.bringToFront(); });
+    layer.on('mouseout', function () { layer.setStyle(styleFor(feature)); });
+    layer.on('popupopen', function () { state.openZone = z; });
+    layer.on('popupclose', function () { if (state.openZone === z) state.openZone = null; });
+  }
+}).addTo(map);
+map.fitBounds(geoLayer.getBounds(), { padding: [20, 20] });
+
+// legend control
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = function () { this._div = L.DomUtil.create('div', 'legendbox'); return this._div; };
+legend.refresh = function () {
+  if (!this._div) return;
+  const info = LAYER_INFO[state.layer], scale = currentScale(), labels = classLabels(scale);
+  let h = '<div class="t">' + esc(info.label) + '</div><div class="u">' + esc(info.unit) + '</div>';
+  for (let i = 0; i < scale.colors.length; i++) {
+    h += '<div class="row"><span class="sw" style="background:' + scale.colors[i] + '"></span><span>' + labels[i] + '</span></div>';
+  }
+  this._div.innerHTML = h;
+};
+legend.addTo(map);
+
+// ---------------------------------------------------------------- headline and chart
+const curve = DATA.curve, weekly = DATA.weekly;
+function curveVal(k, b) {
+  const i = curve.budgets.indexOf(b);
+  if (i < 0 || !curve.series[k]) return null;
+  return curve.series[k][i];
+}
+function weeklyVal(k, b, seriesKey) {
+  const w = weekly[k + '_b' + b];
+  if (w !== undefined && w !== null && BUDGETS_RUN.indexOf(b) >= 0) return w;
+  return curveVal(seriesKey, b);
+}
+function fmtInt(v) {
+  if (v === null || v === undefined || !isFinite(v)) return 'n/a';
+  return Math.round(v).toLocaleString('en-US');
+}
+function renderHeadline() {
+  const b = state.budget;
+  const none = weekly.none, heur = weeklyVal('heur', b, 'heuristic'), mpc = weeklyVal('mpc', b, 'mpc_gru'),
+        orc = weeklyVal('oracle', b, 'mpc_oracle');
+  const tpw = curve.trips_per_week;
+  const sl = (mpc !== null && tpw) ? (1 - mpc / tpw) * 100 : null;
+  let h = '<table>' +
+    '<tr><td colspan="2" class="note" style="margin:0 0 4px">Lost trips per week, ' + b + ' trucks</td></tr>' +
+    '<tr><td>No rebalancing</td><td class="num">' + fmtInt(none) + '</td></tr>' +
+    '<tr><td>Hourly occupancy rule</td><td class="num">' + fmtInt(heur) + '</td></tr>' +
+    '<tr><td>MPC, GRU forecast</td><td class="num">' + fmtInt(mpc) + '</td></tr>' +
+    '<tr><td>MPC, perfect forecast</td><td class="num">' + fmtInt(orc) + '</td></tr>' +
+    '<tr class="hl"><td>Service level (MPC, GRU)</td><td class="num">' + (sl === null ? 'n/a' : sl.toFixed(1) + ' %') + '</td></tr></table>';
+  if (BUDGETS_RUN.indexOf(b) < 0) h += '<div class="note">Numbers from the budget curve. The map layers have no run for ' + b + ' trucks and keep showing ' + state.mapBudget + '.</div>';
+  $('headline').innerHTML = h;
+}
+
+function renderChart() {
+  const W = 300, H = 210, ml = 46, mr = 12, mt = 12, mb = 34;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const B = curve.budgets;
+  let pos = [], hi = 1;
+  SERIES.forEach(function (s) {
+    (curve.series[s.k] || []).forEach(function (v) { if (v !== null && v > 0) { pos.push(v); if (v > hi) hi = v; } });
+  });
+  let lo = pos.length ? Math.min.apply(null, pos) : 1;
+  const ymin = Math.pow(10, Math.floor(Math.log10(lo))), ymax = Math.pow(10, Math.ceil(Math.log10(hi)));
+  const lmin = Math.log10(ymin), lmax = Math.log10(ymax === ymin ? ymin * 10 : ymax);
+  const bmin = Math.min.apply(null, B), bmax = Math.max.apply(null, B);
+  const sx = function (b) { return ml + 8 + (pw - 16) * (b - bmin) / (bmax - bmin); };
+  const sy = function (v) { return mt + ph * (1 - (Math.log10(Math.max(v, ymin)) - lmin) / (lmax - lmin)); };
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" font-family="inherit">';
+  // grid and y ticks (decades)
+  for (let e = Math.round(lmin); e <= Math.round(lmax); e++) {
+    const y = sy(Math.pow(10, e));
+    s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + y + '" y2="' + y + '" stroke="#e3e5e8"/>';
+    s += '<text x="' + (ml - 5) + '" y="' + (y + 3) + '" text-anchor="end" font-size="10" fill="#6b7280">' + Math.pow(10, e).toLocaleString('en-US') + '</text>';
+  }
+  s += '<line x1="' + ml + '" x2="' + ml + '" y1="' + mt + '" y2="' + (mt + ph) + '" stroke="#c9ccd1"/>';
+  s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + (mt + ph) + '" y2="' + (mt + ph) + '" stroke="#c9ccd1"/>';
+  // selected marker
+  if (state.budget !== null && B.indexOf(state.budget) >= 0) {
+    const x = sx(state.budget);
+    s += '<rect x="' + (x - 12) + '" y="' + mt + '" width="24" height="' + ph + '" fill="' + ACCENT + '" opacity="0.08"/>';
+    s += '<line x1="' + x + '" x2="' + x + '" y1="' + mt + '" y2="' + (mt + ph) + '" stroke="' + ACCENT + '" stroke-width="1.5"/>';
+  }
+  // transparent hit columns (drawn before the lines so the points stay on top)
+  B.forEach(function (b) {
+    s += '<rect x="' + (sx(b) - 12) + '" y="' + mt + '" width="24" height="' + (ph + 20) + '" fill="transparent" data-b="' + b + '" style="cursor:pointer"/>';
+  });
+  // x labels and axis titles
+  B.forEach(function (b) {
+    const sel = b === state.budget;
+    s += '<text x="' + sx(b) + '" y="' + (mt + ph + 14) + '" text-anchor="middle" font-size="10" fill="' + (sel ? ACCENT : '#6b7280') + '"' +
+      (sel ? ' font-weight="700"' : '') + ' data-b="' + b + '" style="cursor:pointer">' + b + '</text>';
+  });
+  s += '<text x="' + (ml + pw / 2) + '" y="' + (H - 4) + '" text-anchor="middle" font-size="10" fill="#6b7280">Truck budget</text>';
+  s += '<text transform="translate(11 ' + (mt + ph / 2) + ') rotate(-90)" text-anchor="middle" font-size="10" fill="#6b7280">Lost trips per week (log)</text>';
+  // lines
+  SERIES.forEach(function (ser) {
+    const arr = curve.series[ser.k];
+    if (!arr) return;
+    let pts = [];
+    arr.forEach(function (v, i) { if (v !== null && v !== undefined) pts.push(sx(B[i]).toFixed(1) + ',' + sy(v).toFixed(1)); });
+    s += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + ser.color + '" stroke-width="2"' + (ser.dash ? ' stroke-dasharray="' + ser.dash + '"' : '') + '/>';
+    arr.forEach(function (v, i) {
+      if (v === null || v === undefined) return;
+      s += '<circle cx="' + sx(B[i]).toFixed(1) + '" cy="' + sy(v).toFixed(1) + '" r="3.2" fill="#fff" stroke="' + ser.color + '" stroke-width="1.6" data-b="' + B[i] + '" style="cursor:pointer"><title>' +
+        esc(ser.label) + ', ' + B[i] + ' trucks: ' + fmtInt(v) + ' lost trips per week</title></circle>';
+    });
+  });
+  s += '</svg>';
+  let lg = '<div class="legend">';
+  SERIES.forEach(function (ser) {
+    lg += '<span><i style="border-color:' + ser.color + ';border-top-style:' + (ser.dash ? 'dashed' : 'solid') + '"></i>' + esc(ser.label) + '</span>';
+  });
+  lg += '</div><div class="note">Click a budget to select it.</div>';
+  $('chart').innerHTML = s + lg;
+}
+$('chart').addEventListener('click', function (ev) {
+  let el = ev.target;
+  while (el && el !== this) {
+    if (el.getAttribute && el.getAttribute('data-b') !== null) { selectBudget(parseInt(el.getAttribute('data-b'), 10)); return; }
+    el = el.parentNode;
+  }
+});
+
+// ---------------------------------------------------------------- controls
+function buildLayerControls() {
+  const host = $('layers');
+  LAYER_GROUPS.forEach(function (g) {
+    const h3 = document.createElement('h3'); h3.textContent = g.title; host.appendChild(h3);
+    g.ids.forEach(function (id) {
+      const lab = document.createElement('label'); lab.className = 'radio';
+      const inp = document.createElement('input'); inp.type = 'radio'; inp.name = 'layer'; inp.value = id;
+      inp.checked = id === state.layer;
+      if (!layerData(id, state.mapBudget)) { inp.disabled = true; lab.className += ' disabled'; }
+      inp.addEventListener('change', function () { if (inp.checked) { state.layer = id; refresh(); } });
+      lab.appendChild(inp);
+      lab.appendChild(document.createTextNode(LAYER_INFO[id].label));
+      host.appendChild(lab);
+    });
+  });
+}
+function buildBudgetButtons() {
+  const host = $('budgets');
+  BUDGETS_RUN.forEach(function (b) {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = b; btn.setAttribute('data-b', b);
+    btn.addEventListener('click', function () { selectBudget(b); });
+    host.appendChild(btn);
+  });
+}
+function selectBudget(b) {
+  state.budget = b;
+  if (BUDGETS_RUN.indexOf(b) >= 0) state.mapBudget = b;
+  refresh();
+}
+Array.prototype.forEach.call(document.querySelectorAll('#daytype button'), function (btn) {
+  btn.addEventListener('click', function () { state.dt = btn.getAttribute('data-dt'); refresh(); });
+});
+$('hour').addEventListener('input', function () { state.hour = parseInt(this.value, 10); refresh(); });
+$('play').addEventListener('click', function () { setPlaying(!state.timer); });
+function setPlaying(on) {
+  if (on && !state.timer) {
+    state.timer = setInterval(function () { state.hour = (state.hour + 1) % 24; refresh(); }, 700);
+  } else if (!on && state.timer) {
+    clearInterval(state.timer); state.timer = null;
+  }
+  $('play').innerHTML = state.timer ? '&#10074;&#10074;' : '&#9654;';
+  $('play').className = state.timer ? 'on' : '';
+}
+$('menubtn').addEventListener('click', function () {
+  document.body.classList.toggle('open');
+  setTimeout(function () { map.invalidateSize(); }, 250);
+});
+map.on('click', function () { if (window.innerWidth < 800) document.body.classList.remove('open'); });
+// Fit the zones once the page has a real size. Some hosts (embedded previews) give the map a tiny or
+// zero size at first and only resize it later; a fit at that moment lands at the maximum zoom.
+function fitZones() { map.invalidateSize(); map.fitBounds(geoLayer.getBounds(), { padding: [20, 20] }); }
+let userMoved = false;                       // once the user pans or zooms, stop auto-fitting
+const mapEl = document.getElementById('map');
+['mousedown', 'wheel', 'touchstart', 'keydown'].forEach(function (ev) {
+  mapEl.addEventListener(ev, function () { userMoved = true; }, { passive: true });
+});
+function refit() { if (!userMoved) fitZones(); else map.invalidateSize(); }
+window.addEventListener('resize', refit);
+if (window.ResizeObserver) { new ResizeObserver(refit).observe(mapEl); }
+window.addEventListener('load', function () { refit(); [300, 1000, 2500].forEach(function (t) { setTimeout(refit, t); }); });
+
+// ---------------------------------------------------------------- refresh
+function refresh() {
+  geoLayer.setStyle(styleFor);
+  legend.refresh();
+  $('hour').value = state.hour;
+  $('hourlabel').textContent = hourText(state.hour);
+  Array.prototype.forEach.call(document.querySelectorAll('#daytype button'), function (b) {
+    b.className = b.getAttribute('data-dt') === state.dt ? 'on' : '';
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#budgets button'), function (b) {
+    b.className = parseInt(b.getAttribute('data-b'), 10) === state.budget ? 'on' : '';
+  });
+  $('budnote').textContent = (state.budget !== null && BUDGETS_RUN.indexOf(state.budget) < 0)
+    ? 'Map layers keep showing ' + state.mapBudget + ' trucks (no run for ' + state.budget + ').' : '';
+  $('abouttext').textContent = LAYER_INFO[state.layer].about;
+  renderHeadline();
+  renderChart();
+  if (state.openZone !== null && zoneLayers[state.openZone]) {
+    const p = zoneLayers[state.openZone].getPopup();
+    if (p && p.isOpen()) p.setContent(popupHtml(state.openZone));
+  }
+}
+
+$('title').textContent = META.title || 'Oslo bike-share: demand and rebalancing';
+$('subtitle').textContent = 'Prototype on ' + (META.period || '4 validation weeks, Sept 2025');
+buildLayerControls();
+buildBudgetButtons();
+$('hour').value = state.hour;
+refresh();
+</script>
+</body>
+</html>

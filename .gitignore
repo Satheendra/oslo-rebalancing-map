@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+fixture_data.json
+.DS_Store
+Thumbs.db

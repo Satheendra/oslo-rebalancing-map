@@ -11,8 +11,12 @@ import sys, time, json, datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-V2 = HERE.parent
+# Where the project's code/, data_out/ and runs/ folders live (the course project's v2 folder).
+# Set OSLO_PROJECT_DIR to point at it; the default assumes this script sits inside that folder.
+V2 = Path(os.environ.get("OSLO_PROJECT_DIR", HERE.parent))
 sys.path.insert(0, str(V2 / "code"))
+# Outputs go to ../data when this script is in the repo's src/ folder, else next to the script.
+OUT = HERE.parent / "data" if HERE.name == "src" and (HERE.parent / "data").is_dir() else HERE
 
 import numpy as np
 import pandas as pd
@@ -248,7 +252,7 @@ meta = {
 }
 map_data = {"meta": meta, "zones": zones_fc, "daytypes": DT, "layers": layers_json,
             "weekly": {k: round(float(v), 3) for k, v in weekly.items()}, "curve": curve}
-with open(HERE / "map_data.json", "w", encoding="utf-8") as f:
+with open(OUT / "map_data.json", "w", encoding="utf-8") as f:
     json.dump(map_data, f, separators=(",", ":"))
 
 gj_feats = []
@@ -259,7 +263,7 @@ for zi, feat in enumerate(feats):
             for hh in range(24):
                 props[f"{k}_{d}_{hh:02d}"] = round(float(layers[k][d][zi, hh]), 3)
     gj_feats.append({"type": "Feature", "properties": props, "geometry": feat["geometry"]})
-with open(HERE / "layers.geojson", "w", encoding="utf-8") as f:
+with open(OUT / "layers.geojson", "w", encoding="utf-8") as f:
     json.dump({"type": "FeatureCollection", "features": gj_feats}, f, separators=(",", ":"))
 
 print("\nweekly:", json.dumps(map_data["weekly"]))

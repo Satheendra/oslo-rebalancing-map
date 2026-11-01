@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
 fixture_data.json
+.cache/
 .DS_Store
 Thumbs.db

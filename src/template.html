@@ -20,12 +20,37 @@ html, body { height: 100%; margin: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--ink); background: var(--bg); font-size: 13px; line-height: 1.4;
-  display: flex; overflow: hidden;
+  display: flex; overflow: hidden; position: relative;
 }
 #panel {
   width: 330px; flex: 0 0 330px; height: 100%; background: #fff; border-right: 1px solid var(--line);
   overflow-y: auto; padding: 18px 18px 24px; z-index: 1200;
+  transition: width .2s ease, flex-basis .2s ease, padding .2s ease, border-width .2s ease;
 }
+#ptoggle {
+  position: absolute; top: 50%; left: 330px; transform: translateY(-50%); z-index: 1250;
+  width: 16px; height: 48px; padding: 0; border: 1px solid var(--line); border-left: 0; border-radius: 0 6px 6px 0;
+  background: #fff; color: var(--muted); font-size: 10px; line-height: 1; cursor: pointer;
+  box-shadow: 1px 1px 4px rgba(0,0,0,.15); transition: left .2s ease;
+}
+#ptoggle:hover { color: var(--accent); background: var(--bg); }
+@media (min-width: 800px) {
+  body.collapsed #panel {
+    width: 0; flex-basis: 0; padding-left: 0; padding-right: 0; border-right-width: 0; overflow: hidden;
+    visibility: hidden; transition: width .2s ease, flex-basis .2s ease, padding .2s ease, border-width .2s ease, visibility 0s .2s;
+  }
+  body.collapsed #ptoggle { left: 0; }
+}
+@media (max-width: 799px) { #ptoggle { display: none; } }
+.oprow { display: flex; align-items: center; gap: 10px; }
+.oprow input { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
+.oprow span { flex: 0 0 auto; min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.ctlbox {
+  background: #fff; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.25); border: 1px solid var(--line);
+}
+.northarrow { width: 34px; padding: 4px 0 3px; text-align: center; line-height: 0; }
+.northarrow svg { display: block; margin: 0 auto; }
+.fitbtn { font-size: 18px !important; line-height: 30px !important; color: var(--ink) !important; cursor: pointer; }
 #main { flex: 1 1 auto; min-width: 0; height: 100%; display: flex; flex-direction: column; position: relative; }
 #map { flex: 1 1 auto; min-height: 0; background: #e9ecef; }
 h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
@@ -49,6 +74,10 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
 .seg button:last-child { border-right: 0; }
 .seg button.on { background: var(--accent); color: #fff; }
 .seg button:hover:not(.on) { background: var(--bg); }
+.seg.full { display: flex; }
+.seg.full button { flex: 1 1 0; padding: 6px 6px; }
+.sub { min-height: 1.4em; }
+.periodgroup { margin-bottom: 12px; }
 .box { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
 .box table { width: 100%; border-collapse: collapse; }
 .box td { padding: 2px 0; }
@@ -57,7 +86,8 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
 .note { color: var(--muted); font-size: 11px; margin-top: 6px; }
 #chart svg { width: 100%; height: auto; display: block; }
 #chart .legend { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 11px; color: var(--muted); margin-top: 4px; }
-#chart .legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+#chart .legend i { display: inline-block; width: 11px; height: 9px; border: 1.5px solid; vertical-align: middle; margin-right: 4px; box-sizing: border-box; }
+.budbtns { margin-bottom: 4px; }
 #about p { margin: 0; color: #444; }
 #about .foot { margin-top: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 8px; }
 #bar {
@@ -84,6 +114,12 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
 .legendbox .row { display: flex; align-items: center; gap: 7px; }
 .legendbox .sw { width: 22px; height: 12px; border: 1px solid rgba(0,0,0,.15); display: inline-block; }
 .leaflet-tooltip { font-size: 12px; line-height: 1.4; }
+.dlabel { background: none; border: 0; pointer-events: none; }
+.dlabel span {
+  display: block; width: 120px; margin-left: -60px; margin-top: -6px; text-align: center; white-space: nowrap;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #6b7280;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none;
+}
 .pop { font-size: 12px; }
 .pop b { font-size: 13px; }
 .pop .k { color: var(--muted); }
@@ -92,6 +128,7 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
   #panel { position: absolute; top: 0; left: 0; bottom: 0; width: min(330px, 88vw); transform: translateX(-100%); transition: transform .2s; box-shadow: 2px 0 10px rgba(0,0,0,.2); }
   body.open #panel { transform: none; }
   #menubtn { display: block; }
+  .leaflet-top.leaflet-left { margin-top: 44px; }
   body.open #menubtn { left: calc(min(330px, 88vw) + 10px); }
   #hourlabel { min-width: 96px; }
 }
@@ -102,12 +139,37 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
   <h1 id="title"></h1>
   <p class="sub" id="subtitle"></p>
 
+  <div class="group">
+    <h2>Basemap</h2>
+    <div class="seg full" id="basemaps">
+      <button type="button" data-bm="osm" class="on">OSM</button><button type="button" data-bm="light">Light</button><button type="button" data-bm="dark">Dark</button>
+    </div>
+  </div>
+
+  <div class="group periodgroup">
+    <div class="seg full" id="periods"></div>
+  </div>
+
   <div class="group" id="layers"><h2>Layer</h2></div>
+
+  <div class="group">
+    <h2>Zone opacity</h2>
+    <div class="oprow">
+      <input type="range" id="opacity" min="0" max="100" step="1" value="70" aria-label="Zone opacity">
+      <span id="oplabel">70 %</span>
+    </div>
+  </div>
+
+  <div class="group" id="overlays">
+    <h2>Overlays</h2>
+    <label class="radio"><input type="checkbox" id="ov_graph" autocomplete="off">Zone graph</label>
+    <label class="radio"><input type="checkbox" id="ov_stations" autocomplete="off">Stations</label>
+    <label class="radio"><input type="checkbox" id="ov_districts" autocomplete="off" checked>Oslo districts</label>
+  </div>
 
   <div class="group">
     <h2>Truck budget</h2>
     <div class="seg" id="budgets"></div>
-    <div class="note" id="budnote"></div>
   </div>
 
   <div class="group">
@@ -123,16 +185,18 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
   </div>
 
   <div class="group">
-    <h2>Trucks versus service level</h2>
+    <h2>Controller ladder</h2>
     <div id="chart"></div>
+    <div class="note">Test ladder from the paper's Table of controller means; PPO rows are the mean of three seeds (argmax policy).</div>
   </div>
 
   <div class="group" id="about">
     <h2>About</h2>
     <p id="abouttext"></p>
-    <div class="foot">Oslo prototype. Validation weeks only. Data: Oslo Bysykkel trips, 30 zones.</div>
+    <div class="foot">Oslo prototype. Numbers from the v3 simulator and MPC of the submitted study. Data: Oslo Bysykkel trips, 30 zones, 276 stations.</div>
   </div>
 </aside>
+<button id="ptoggle" type="button" title="Hide panel" aria-label="Hide panel">&#9664;</button>
 
 <div id="main">
   <button id="menubtn" type="button">Menu</button>
@@ -147,12 +211,13 @@ h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; line-height: 1.25; }
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 const DATA = __DATA__;
+const DISTRICTS = __DISTRICTS__;
 
 // ---------------------------------------------------------------- layer info
 // id -> label, unit, family, about. "budget": true when the data key carries a _bXX suffix.
 const LAYER_INFO = {
   dep:         { label: 'Departures', unit: 'trips per hour', family: 'demand', budget: false,
-                 about: 'How many bike trips start in each zone per hour, on average, in the four validation weeks. Darker blue means more trips leave from that zone.' },
+                 about: 'How many bike trips start in each zone per hour, on average, in the selected period. Darker blue means more trips leave from that zone.' },
   arr:         { label: 'Arrivals', unit: 'trips per hour', family: 'demand', budget: false,
                  about: 'How many bike trips end in each zone per hour, on average. Darker blue means more bikes arrive there.' },
   dep_gru:     { label: 'GRU forecast departures', unit: 'trips per hour', family: 'demand', budget: false,
@@ -185,25 +250,29 @@ const PALETTES = {
   diverging: ['#2166ac', '#67a9cf', '#d1e5f0', '#fddbc7', '#ef8a62', '#b2182b']
 };
 const ACCENT = '#1d6fa5';
-const SERIES = [
-  { k: 'heuristic',  label: 'Hourly heuristic',        color: '#8a8f98', dash: '' },
-  { k: 'lp_gru',     label: 'Old LP',                  color: '#d64545', dash: '' },
-  { k: 'mpc_gru',    label: 'MPC, GRU forecast',       color: '#1d6fa5', dash: '' },
-  { k: 'mpc_oracle', label: 'MPC, perfect forecast',   color: '#1d6fa5', dash: '6 3' }
-];
+const REF_GREY = '#8a8f98';
+const PERIOD_SHORT = { val: 'Validation (Sept 2025)', test: 'Test (2026)' };
 
 // ---------------------------------------------------------------- state
 const META = DATA.meta;
+const PERIODS = META.periods || {};
+const PERIOD_KEYS = Object.keys(PERIODS);
 const BUDGETS_RUN = META.budgets_run || [];
 const state = {
+  period: PERIODS.test ? 'test' : PERIOD_KEYS[0],   // the paper's headline period
   layer: 'dep',
   dt: 'wd',
   hour: 8,
-  budget: BUDGETS_RUN.length ? BUDGETS_RUN[0] : null,   // budget shown in headline/chart
-  mapBudget: BUDGETS_RUN.length ? BUDGETS_RUN[0] : null, // budget used for map layers
+  budget: BUDGETS_RUN.length ? BUDGETS_RUN[0] : null,   // one budget for map layers, headline and ladder
   openZone: null,
-  timer: null
+  timer: null,
+  opacity: 0.7,                 // zone fill opacity, set by the slider
+  basemap: 'osm'
 };
+// localStorage can be blocked or throw (private windows, previews): always wrap it
+function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+function periodLabel(p) { return (PERIODS[p] && PERIODS[p].label) || p; }
 
 function $(id) { return document.getElementById(id); }
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -214,10 +283,11 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 function dataKey(id, budget) {
   return LAYER_INFO[id].budget ? id + '_b' + budget : id;
 }
-function layerData(id, budget) {
-  let d = DATA.layers[dataKey(id, budget)];
+function layerData(id, budget, period) {
+  const L = DATA.layers[period || state.period] || {};
+  let d = L[dataKey(id, budget)];
   if (!d && id === 'lost_none') {          // budget irrelevant for this layer: use any budget key
-    for (let i = 0; i < BUDGETS_RUN.length && !d; i++) d = DATA.layers['lost_none_b' + BUDGETS_RUN[i]];
+    for (let i = 0; i < BUDGETS_RUN.length && !d; i++) d = L['lost_none_b' + BUDGETS_RUN[i]];
   }
   return d || null;
 }
@@ -227,7 +297,6 @@ function value(id, budget, dt, zone, hour) {
   const v = d[dt][zone][hour];
   return v === undefined ? null : v;
 }
-function layerAvailable(id) { return !!layerData(id, state.mapBudget); }
 
 // ---------------------------------------------------------------- breaks and colours
 function niceStep(x) {
@@ -254,15 +323,17 @@ const breaksCache = {};
 function getScale(id, budget) {
   const ck = dataKey(id, budget);
   if (breaksCache[ck]) return breaksCache[ck];
-  const d = layerData(id, budget);
   const fam = LAYER_INFO[id].family;
   const vals = [];
-  if (d) {
+  // breaks use BOTH periods, both day types and all hours, so the two periods are comparable
+  PERIOD_KEYS.forEach(function (p) {
+    const d = layerData(id, budget, p);
+    if (!d) return;
     ['wd', 'we'].forEach(function (dt) {
       if (!d[dt]) return;
       d[dt].forEach(function (row) { row.forEach(function (v) { if (v !== null && isFinite(v)) vals.push(fam === 'diverging' ? Math.abs(v) : v); }); });
     });
-  }
+  });
   vals.sort(function (a, b) { return a - b; });
   let p95 = percentile(vals, 0.95);
   if (!(p95 > 0)) p95 = vals.length ? vals[vals.length - 1] : 0;   // sparse layers: fall back to max
@@ -306,17 +377,45 @@ const featById = {};
 zonesGeo.features.forEach(function (f) { featById[f.properties.zone] = f; });
 
 const map = L.map('map', { zoomControl: true, preferCanvas: false });
-// Standard OpenStreetMap tiles (no API key). The polygons are drawn at 0.7 opacity so streets show through.
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom: 19
-}).addTo(map);
+// Basemaps (no API key). Only one is on the map at a time. The polygons are semi-transparent
+// (opacity slider, default 70 %) so streets show through.
+const ESRI_ATTR = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ';
+const BASEMAPS = {
+  osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19
+  }),
+  light: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    attribution: ESRI_ATTR, maxZoom: 16
+  }),
+  dark: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    attribution: ESRI_ATTR, maxZoom: 16
+  })
+};
+function setBasemap(name, save) {
+  if (!BASEMAPS[name]) name = 'osm';
+  Object.keys(BASEMAPS).forEach(function (k) { if (k !== name && map.hasLayer(BASEMAPS[k])) map.removeLayer(BASEMAPS[k]); });
+  if (!map.hasLayer(BASEMAPS[name])) BASEMAPS[name].addTo(map);
+  BASEMAPS[name].bringToBack();
+  state.basemap = name;
+  const mz = BASEMAPS[name].options.maxZoom;
+  if (map.getZoom() > mz) map.setZoom(mz);
+  Array.prototype.forEach.call(document.querySelectorAll('#basemaps button'), function (b) {
+    b.className = b.getAttribute('data-bm') === name ? 'on' : '';
+  });
+  if (save) lsSet('oslomap.basemap', name);
+}
+setBasemap(BASEMAPS[lsGet('oslomap.basemap')] ? lsGet('oslomap.basemap') : 'osm', false);
+{
+  const savedOp = parseInt(lsGet('oslomap.opacity'), 10);
+  if (isFinite(savedOp) && savedOp >= 0 && savedOp <= 100) state.opacity = savedOp / 100;
+}
 
-function currentScale() { return getScale(state.layer, state.mapBudget); }
-function zoneValue(zone) { return value(state.layer, state.mapBudget, state.dt, zone, state.hour); }
+function currentScale() { return getScale(state.layer, state.budget); }
+function zoneValue(zone) { return value(state.layer, state.budget, state.dt, zone, state.hour); }
 function styleFor(feature) {
   const v = zoneValue(feature.properties.zone);
-  return { fillColor: colorFor(currentScale(), v), fillOpacity: 0.7, color: '#ffffff', weight: 1.2, opacity: 1 };
+  return { fillColor: colorFor(currentScale(), v), fillOpacity: state.opacity, color: '#ffffff', weight: 1.2, opacity: 1 };
 }
 function tooltipHtml(zone) {
   const p = featById[zone].properties, info = LAYER_INFO[state.layer], v = zoneValue(zone);
@@ -325,7 +424,7 @@ function tooltipHtml(zone) {
 }
 function sparkSvg(zone) {
   const W = 250, H = 96, ml = 28, mr = 6, mt = 6, mb = 18;
-  const d = layerData(state.layer, state.mapBudget);
+  const d = layerData(state.layer, state.budget);
   if (!d) return '';
   const pw = W - ml - mr, ph = H - mt - mb;
   let lo = 0, hi = 0;
@@ -389,108 +488,168 @@ legend.refresh = function () {
 };
 legend.addTo(map);
 
-// ---------------------------------------------------------------- headline and chart
-const curve = DATA.curve, weekly = DATA.weekly;
-function curveVal(k, b) {
-  const i = curve.budgets.indexOf(b);
-  if (i < 0 || !curve.series[k]) return null;
-  return curve.series[k][i];
+// north arrow (top right), scale bar (bottom left) and fit-to-zones button (under the zoom buttons)
+const northArrow = L.control({ position: 'topright' });
+northArrow.onAdd = function () {
+  const div = L.DomUtil.create('div', 'ctlbox northarrow');
+  div.title = 'North is up';
+  div.innerHTML = '<svg width="20" height="30" viewBox="0 0 20 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+    '<path d="M10 2 L16.5 17 L10 13.5 L3.5 17 Z" fill="#2b2f36"/>' +
+    '<text x="10" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#2b2f36" font-family="Arial, sans-serif">N</text></svg>';
+  return div;
+};
+northArrow.addTo(map);
+L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
+const fitControl = L.control({ position: 'topleft' });
+fitControl.onAdd = function () {
+  const div = L.DomUtil.create('div', 'leaflet-bar');
+  const a = L.DomUtil.create('a', 'fitbtn', div);
+  a.href = '#'; a.title = 'Fit to zones'; a.setAttribute('role', 'button'); a.setAttribute('aria-label', 'Fit to zones');
+  a.innerHTML = '&#8860;';
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.on(a, 'click', function (e) { L.DomEvent.preventDefault(e); fitZones(); });
+  return div;
+};
+fitControl.addTo(map);
+
+// ---------------------------------------------------------------- overlays (zone graph, stations)
+// Drawn in their own pane above the choropleth. Lines and zone dots are not interactive (clicks fall through
+// to the zone polygons); only the station circles take pointer events.
+map.createPane('overlayTop');
+map.getPane('overlayTop').style.zIndex = 450;
+const topRenderer = L.svg({ pane: 'overlayTop' });
+const graphGroup = L.layerGroup();
+const stationGroup = L.layerGroup();
+(DATA.edges || []).forEach(function (e) {
+  const a = featById[e[0]], b = featById[e[1]];
+  if (!a || !b) return;
+  L.polyline([[a.properties.lat, a.properties.lon], [b.properties.lat, b.properties.lon]],
+    { color: '#8a8f98', weight: 1, opacity: 0.8, interactive: false, renderer: topRenderer }).addTo(graphGroup);
+});
+zonesGeo.features.forEach(function (f) {
+  L.circleMarker([f.properties.lat, f.properties.lon],
+    { radius: 2.5, color: '#2b2f36', weight: 1, fillColor: '#2b2f36', fillOpacity: 1, interactive: false, renderer: topRenderer }).addTo(graphGroup);
+});
+(DATA.stations || []).forEach(function (s) {
+  const m = L.circleMarker([s.lat, s.lon],
+    { radius: 3, color: '#2b2f36', weight: 1, fillColor: '#ffffff', fillOpacity: 1, renderer: topRenderer });
+  m.bindTooltip(esc(s.name) + '<br>Capacity ' + s.cap + ' bikes, zone ' + s.zone);
+  m.addTo(stationGroup);
+});
+function setOverlay(group, on) { if (on) map.addLayer(group); else map.removeLayer(group); }
+
+// Oslo districts (bydeler): context outlines in a pane BELOW the zone choropleth (overlayPane is 400),
+// plus a light name label at each polygon's centroid. Not interactive, so the zone hover still works.
+map.createPane('districts');
+map.getPane('districts').style.zIndex = 380;
+map.createPane('districtLabels');
+map.getPane('districtLabels').style.zIndex = 390;
+map.getPane('districtLabels').style.pointerEvents = 'none';
+const districtGroup = L.layerGroup();
+const DISTRICT_ATTR = 'Oslo districts: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ODbL';
+function ringCentroid(ring) {          // area-weighted centroid of one [lon, lat] ring, plus its area
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0, n = ring.length - 1; i < n; i++) {
+    const x0 = ring[i][0], y0 = ring[i][1], x1 = ring[i + 1][0], y1 = ring[i + 1][1], c = x0 * y1 - x1 * y0;
+    a += c; cx += (x0 + x1) * c; cy += (y0 + y1) * c;
+  }
+  if (a === 0) return { a: 0, lon: ring[0][0], lat: ring[0][1] };
+  return { a: Math.abs(a / 2), lon: cx / (3 * a), lat: cy / (3 * a) };
 }
-function weeklyVal(k, b, seriesKey) {
-  const w = weekly[k + '_b' + b];
-  if (w !== undefined && w !== null && BUDGETS_RUN.indexOf(b) >= 0) return w;
-  return curveVal(seriesKey, b);
+function featureCentroid(geom) {       // centroid of the largest outer ring
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  let best = null;
+  polys.forEach(function (p) { const c = ringCentroid(p[0]); if (!best || c.a > best.a) best = c; });
+  return best;
 }
+(DISTRICTS.features || []).forEach(function (f) {
+  L.geoJSON(f, {
+    pane: 'districts', renderer: L.svg({ pane: 'districts' }), interactive: false,
+    style: { color: '#555b63', weight: 1.2, dashArray: '4 3', fill: false, opacity: 0.9, interactive: false }
+  }).addTo(districtGroup);
+  const c = featureCentroid(f.geometry);
+  if (c) {
+    L.marker([c.lat, c.lon], {
+      pane: 'districtLabels', interactive: false, keyboard: false,
+      icon: L.divIcon({ className: 'dlabel', html: '<span>' + esc(f.properties.name) + '</span>', iconSize: [0, 0] })
+    }).addTo(districtGroup);
+  }
+});
+function setDistricts(on) {
+  setOverlay(districtGroup, on);
+  if (on) map.attributionControl.addAttribution(DISTRICT_ATTR); else map.attributionControl.removeAttribution(DISTRICT_ATTR);
+}
+if ((DISTRICTS.features || []).length) setDistricts($('ov_districts').checked);
+else { $('ov_districts').disabled = true; $('ov_districts').checked = false; }
+
+// ---------------------------------------------------------------- headline and ladder chart
 function fmtInt(v) {
   if (v === null || v === undefined || !isFinite(v)) return 'n/a';
   return Math.round(v).toLocaleString('en-US');
 }
 function renderHeadline() {
-  const b = state.budget;
-  const none = weekly.none, heur = weeklyVal('heur', b, 'heuristic'), mpc = weeklyVal('mpc', b, 'mpc_gru'),
-        orc = weeklyVal('oracle', b, 'mpc_oracle');
-  const tpw = curve.trips_per_week;
+  const b = state.budget, p = state.period;
+  const w = (DATA.weekly && DATA.weekly[p]) || {};
+  const get = function (k) { const v = w[k]; return v === undefined ? null : v; };
+  const none = get('none'), heur = get('heur_b' + b), mpc = get('mpc_b' + b), orc = get('oracle_b' + b);
+  const tpw = DATA.trips_per_week ? DATA.trips_per_week[p] : null;
   const sl = (mpc !== null && tpw) ? (1 - mpc / tpw) * 100 : null;
-  let h = '<table>' +
-    '<tr><td colspan="2" class="note" style="margin:0 0 4px">Lost trips per week, ' + b + ' trucks</td></tr>' +
+  const h = '<table>' +
+    '<tr><td colspan="2" class="note" style="margin:0 0 4px">Lost trips per week, ' + b + ' trucks, ' + esc(PERIOD_SHORT[p] || periodLabel(p)) + '</td></tr>' +
     '<tr><td>No rebalancing</td><td class="num">' + fmtInt(none) + '</td></tr>' +
     '<tr><td>Hourly occupancy rule</td><td class="num">' + fmtInt(heur) + '</td></tr>' +
     '<tr><td>MPC, GRU forecast</td><td class="num">' + fmtInt(mpc) + '</td></tr>' +
     '<tr><td>MPC, perfect forecast</td><td class="num">' + fmtInt(orc) + '</td></tr>' +
     '<tr class="hl"><td>Service level (MPC, GRU)</td><td class="num">' + (sl === null ? 'n/a' : sl.toFixed(1) + ' %') + '</td></tr></table>';
-  if (BUDGETS_RUN.indexOf(b) < 0) h += '<div class="note">Numbers from the budget curve. The map layers have no run for ' + b + ' trucks and keep showing ' + state.mapBudget + '.</div>';
   $('headline').innerHTML = h;
 }
 
+// Controller ladder: horizontal bars, log x-axis, one row per controller for the selected period and budget.
 function renderChart() {
-  const W = 300, H = 210, ml = 46, mr = 12, mt = 12, mb = 34;
-  const pw = W - ml - mr, ph = H - mt - mb;
-  const B = curve.budgets;
-  let pos = [], hi = 1;
-  SERIES.forEach(function (s) {
-    (curve.series[s.k] || []).forEach(function (v) { if (v !== null && v > 0) { pos.push(v); if (v > hi) hi = v; } });
-  });
-  let lo = pos.length ? Math.min.apply(null, pos) : 1;
-  const ymin = Math.pow(10, Math.floor(Math.log10(lo))), ymax = Math.pow(10, Math.ceil(Math.log10(hi)));
-  const lmin = Math.log10(ymin), lmax = Math.log10(ymax === ymin ? ymin * 10 : ymax);
-  const bmin = Math.min.apply(null, B), bmax = Math.max.apply(null, B);
-  const sx = function (b) { return ml + 8 + (pw - 16) * (b - bmin) / (bmax - bmin); };
-  const sy = function (v) { return mt + ph * (1 - (Math.log10(Math.max(v, ymin)) - lmin) / (lmax - lmin)); };
+  const lad = DATA.ladder || {};
+  const rows = lad[state.period] || [];
+  const bi = (lad.budgets || []).indexOf(state.budget);
+  if (!rows.length || bi < 0) {
+    $('chart').innerHTML = '<div class="note">No ladder rows for this period and budget.</div>';
+    return;
+  }
+  const vals = rows.map(function (r) { return r.lost[bi]; });
+  const pos = vals.filter(function (v) { return v !== null && v > 0; });
+  const vmax = pos.length ? Math.max.apply(null, pos) : 10000, vmin = pos.length ? Math.min.apply(null, pos) : 100;
+  const lmin = Math.min(2, Math.floor(Math.log10(vmin))), lmax = Math.max(4, Math.ceil(Math.log10(vmax)));
+  const W = 294, ml = 6, mr = 44, mt = 6, rowH = 30, barH = 13, axisH = 34;
+  const pw = W - ml - mr, ph = rows.length * rowH, H = mt + ph + axisH;
+  const sx = function (v) {
+    if (!(v > 0)) return ml;
+    return ml + pw * Math.max(0, (Math.log10(v) - lmin) / (lmax - lmin));
+  };
   let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" font-family="inherit">';
-  // grid and y ticks (decades)
-  for (let e = Math.round(lmin); e <= Math.round(lmax); e++) {
-    const y = sy(Math.pow(10, e));
-    s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + y + '" y2="' + y + '" stroke="#e3e5e8"/>';
-    s += '<text x="' + (ml - 5) + '" y="' + (y + 3) + '" text-anchor="end" font-size="10" fill="#6b7280">' + Math.pow(10, e).toLocaleString('en-US') + '</text>';
+  for (let e = lmin; e <= lmax; e++) {
+    const x = ml + pw * (e - lmin) / (lmax - lmin);
+    s += '<line x1="' + x + '" x2="' + x + '" y1="' + mt + '" y2="' + (mt + ph) + '" stroke="#e3e5e8"/>';
+    s += '<text x="' + x + '" y="' + (mt + ph + 13) + '" text-anchor="middle" font-size="10" fill="#6b7280">' + Math.pow(10, e).toLocaleString('en-US') + '</text>';
   }
-  s += '<line x1="' + ml + '" x2="' + ml + '" y1="' + mt + '" y2="' + (mt + ph) + '" stroke="#c9ccd1"/>';
   s += '<line x1="' + ml + '" x2="' + (W - mr) + '" y1="' + (mt + ph) + '" y2="' + (mt + ph) + '" stroke="#c9ccd1"/>';
-  // selected marker
-  if (state.budget !== null && B.indexOf(state.budget) >= 0) {
-    const x = sx(state.budget);
-    s += '<rect x="' + (x - 12) + '" y="' + mt + '" width="24" height="' + ph + '" fill="' + ACCENT + '" opacity="0.08"/>';
-    s += '<line x1="' + x + '" x2="' + x + '" y1="' + mt + '" y2="' + (mt + ph) + '" stroke="' + ACCENT + '" stroke-width="1.5"/>';
-  }
-  // transparent hit columns (drawn before the lines so the points stay on top)
-  B.forEach(function (b) {
-    s += '<rect x="' + (sx(b) - 12) + '" y="' + mt + '" width="24" height="' + (ph + 20) + '" fill="transparent" data-b="' + b + '" style="cursor:pointer"/>';
-  });
-  // x labels and axis titles
-  B.forEach(function (b) {
-    const sel = b === state.budget;
-    s += '<text x="' + sx(b) + '" y="' + (mt + ph + 14) + '" text-anchor="middle" font-size="10" fill="' + (sel ? ACCENT : '#6b7280') + '"' +
-      (sel ? ' font-weight="700"' : '') + ' data-b="' + b + '" style="cursor:pointer">' + b + '</text>';
-  });
-  s += '<text x="' + (ml + pw / 2) + '" y="' + (H - 4) + '" text-anchor="middle" font-size="10" fill="#6b7280">Truck budget</text>';
-  s += '<text transform="translate(11 ' + (mt + ph / 2) + ') rotate(-90)" text-anchor="middle" font-size="10" fill="#6b7280">Lost trips per week (log)</text>';
-  // lines
-  SERIES.forEach(function (ser) {
-    const arr = curve.series[ser.k];
-    if (!arr) return;
-    let pts = [];
-    arr.forEach(function (v, i) { if (v !== null && v !== undefined) pts.push(sx(B[i]).toFixed(1) + ',' + sy(v).toFixed(1)); });
-    s += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + ser.color + '" stroke-width="2"' + (ser.dash ? ' stroke-dasharray="' + ser.dash + '"' : '') + '/>';
-    arr.forEach(function (v, i) {
-      if (v === null || v === undefined) return;
-      s += '<circle cx="' + sx(B[i]).toFixed(1) + '" cy="' + sy(v).toFixed(1) + '" r="3.2" fill="#fff" stroke="' + ser.color + '" stroke-width="1.6" data-b="' + B[i] + '" style="cursor:pointer"><title>' +
-        esc(ser.label) + ', ' + B[i] + ' trucks: ' + fmtInt(v) + ' lost trips per week</title></circle>';
-    });
+  s += '<text x="' + (ml + pw / 2) + '" y="' + (H - 4) + '" text-anchor="middle" font-size="10" fill="#6b7280">Lost trips per week (log scale)</text>';
+  rows.forEach(function (r, i) {
+    const v = r.lost[bi], y0 = mt + i * rowH;
+    const x1 = sx(v), w = Math.max(1.5, x1 - ml);
+    s += '<text x="' + ml + '" y="' + (y0 + 10) + '" font-size="10.5" fill="#2b2f36">' + esc(r.label) + '</text>';
+    if (r.kind === 'ceiling') {
+      s += '<rect x="' + (ml + 0.75) + '" y="' + (y0 + 14) + '" width="' + (w - 1.5) + '" height="' + (barH - 1.5) + '" fill="#eef4f9" stroke="' + ACCENT + '" stroke-width="1.5" stroke-dasharray="4 2"/>';
+    } else {
+      s += '<rect x="' + ml + '" y="' + (y0 + 14) + '" width="' + w + '" height="' + (barH - 1.5) + '" fill="' + (r.kind === 'learned' ? ACCENT : REF_GREY) + '"/>';
+    }
+    s += '<text x="' + (ml + w + 4) + '" y="' + (y0 + 14 + barH - 3) + '" font-size="10.5" font-weight="600" fill="#2b2f36">' + fmtInt(v) + '</text>';
   });
   s += '</svg>';
-  let lg = '<div class="legend">';
-  SERIES.forEach(function (ser) {
-    lg += '<span><i style="border-color:' + ser.color + ';border-top-style:' + (ser.dash ? 'dashed' : 'solid') + '"></i>' + esc(ser.label) + '</span>';
-  });
-  lg += '</div><div class="note">Click a budget to select it.</div>';
+  const lg = '<div class="legend">' +
+    '<span><i style="background:' + REF_GREY + ';border-color:' + REF_GREY + '"></i>Reference</span>' +
+    '<span><i style="background:' + ACCENT + ';border-color:' + ACCENT + '"></i>Learned</span>' +
+    '<span><i style="background:#eef4f9;border-color:' + ACCENT + ';border-style:dashed"></i>Ceiling</span></div>' +
+    '<div class="note" style="margin-top:2px">' + state.budget + ' trucks, ' + esc(PERIOD_SHORT[state.period] || periodLabel(state.period)) + '</div>';
   $('chart').innerHTML = s + lg;
 }
-$('chart').addEventListener('click', function (ev) {
-  let el = ev.target;
-  while (el && el !== this) {
-    if (el.getAttribute && el.getAttribute('data-b') !== null) { selectBudget(parseInt(el.getAttribute('data-b'), 10)); return; }
-    el = el.parentNode;
-  }
-});
 
 // ---------------------------------------------------------------- controls
 function buildLayerControls() {
@@ -501,7 +660,7 @@ function buildLayerControls() {
       const lab = document.createElement('label'); lab.className = 'radio';
       const inp = document.createElement('input'); inp.type = 'radio'; inp.name = 'layer'; inp.value = id;
       inp.checked = id === state.layer;
-      if (!layerData(id, state.mapBudget)) { inp.disabled = true; lab.className += ' disabled'; }
+      if (!layerData(id, state.budget)) { inp.disabled = true; lab.className += ' disabled'; }
       inp.addEventListener('change', function () { if (inp.checked) { state.layer = id; refresh(); } });
       lab.appendChild(inp);
       lab.appendChild(document.createTextNode(LAYER_INFO[id].label));
@@ -511,17 +670,29 @@ function buildLayerControls() {
 }
 function buildBudgetButtons() {
   const host = $('budgets');
-  BUDGETS_RUN.forEach(function (b) {
-    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = b; btn.setAttribute('data-b', b);
+  BUDGETS_RUN.slice().sort(function (a, b) { return a - b; }).forEach(function (b) {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = 'Budget ' + b; btn.setAttribute('data-b', b);
     btn.addEventListener('click', function () { selectBudget(b); });
     host.appendChild(btn);
   });
 }
 function selectBudget(b) {
   state.budget = b;
-  if (BUDGETS_RUN.indexOf(b) >= 0) state.mapBudget = b;
   refresh();
 }
+function buildPeriodButtons() {
+  const host = $('periods');
+  PERIOD_KEYS.forEach(function (p) {
+    const btn = document.createElement('button'); btn.type = 'button';
+    btn.textContent = PERIOD_SHORT[p] || periodLabel(p); btn.setAttribute('data-p', p);
+    btn.title = periodLabel(p);
+    btn.addEventListener('click', function () { state.period = p; refresh(); });
+    host.appendChild(btn);
+  });
+}
+$('ov_graph').addEventListener('change', function () { setOverlay(graphGroup, this.checked); });
+$('ov_stations').addEventListener('change', function () { setOverlay(stationGroup, this.checked); });
+$('ov_districts').addEventListener('change', function () { setDistricts(this.checked); });
 Array.prototype.forEach.call(document.querySelectorAll('#daytype button'), function (btn) {
   btn.addEventListener('click', function () { state.dt = btn.getAttribute('data-dt'); refresh(); });
 });
@@ -538,6 +709,26 @@ function setPlaying(on) {
 }
 $('menubtn').addEventListener('click', function () {
   document.body.classList.toggle('open');
+  setTimeout(function () { map.invalidateSize(); }, 250);
+});
+Array.prototype.forEach.call(document.querySelectorAll('#basemaps button'), function (btn) {
+  btn.addEventListener('click', function () { setBasemap(btn.getAttribute('data-bm'), true); });
+});
+$('opacity').addEventListener('input', function () {
+  const v = parseInt(this.value, 10);
+  state.opacity = v / 100;
+  $('oplabel').textContent = v + ' %';
+  geoLayer.setStyle(styleFor);
+  lsSet('oslomap.opacity', String(v));
+});
+$('opacity').value = Math.round(state.opacity * 100);
+$('oplabel').textContent = Math.round(state.opacity * 100) + ' %';
+// collapsible panel (wide screens). Below 800 px the existing drawer (#menubtn, body.open) is used instead.
+$('ptoggle').addEventListener('click', function () {
+  const c = document.body.classList.toggle('collapsed');
+  this.innerHTML = c ? '&#9654;' : '&#9664;';
+  this.title = c ? 'Show panel' : 'Hide panel';
+  this.setAttribute('aria-label', c ? 'Show panel' : 'Hide panel');
   setTimeout(function () { map.invalidateSize(); }, 250);
 });
 map.on('click', function () { if (window.innerWidth < 800) document.body.classList.remove('open'); });
@@ -566,8 +757,10 @@ function refresh() {
   Array.prototype.forEach.call(document.querySelectorAll('#budgets button'), function (b) {
     b.className = parseInt(b.getAttribute('data-b'), 10) === state.budget ? 'on' : '';
   });
-  $('budnote').textContent = (state.budget !== null && BUDGETS_RUN.indexOf(state.budget) < 0)
-    ? 'Map layers keep showing ' + state.mapBudget + ' trucks (no run for ' + state.budget + ').' : '';
+  Array.prototype.forEach.call(document.querySelectorAll('#periods button'), function (b) {
+    b.className = b.getAttribute('data-p') === state.period ? 'on' : '';
+  });
+  $('subtitle').textContent = periodLabel(state.period);
   $('abouttext').textContent = LAYER_INFO[state.layer].about;
   renderHeadline();
   renderChart();
@@ -578,7 +771,7 @@ function refresh() {
 }
 
 $('title').textContent = META.title || 'Oslo bike-share: demand and rebalancing';
-$('subtitle').textContent = 'Prototype on ' + (META.period || '4 validation weeks, Sept 2025');
+buildPeriodButtons();
 buildLayerControls();
 buildBudgetButtons();
 $('hour').value = state.hour;

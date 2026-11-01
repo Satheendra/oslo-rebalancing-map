@@ -1,99 +1,118 @@
-"""Build map_data.json and layers.geojson for the Oslo rebalancing map prototype (see SCHEMA.md).
+"""Build map_data.json and layers.geojson for the Oslo rebalancing map (v3 numbers, schema version 2, see data/SCHEMA.md).
 
-Reads from v2/code, v2/data_out, v2/runs (read-only). Writes only into this folder.
-Run from this folder:  python build_data.py
+Reads from the project's v3 folder (code/, data_out/, runs/; read-only) and the raw station list. Writes only into
+this repo (data/ and .cache/). Run from the repo folder:   python src\\build_data.py   [--fresh] [--periods val,test]
+
+Environment: OSLO_PROJECT_DIR (default: the v3 folder on this machine), OSLO_STATION_MASTER (raw station list),
+ORACLE_PROFILE = actual | profile  (what the oracle MPC uses for plan hours 2..H; the paper uses 'actual').
+Finished controller runs are cached in .cache/ (so a failed spot check does not cost another 15 minutes); --fresh ignores it.
 """
 import os
-for _k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+for _k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ[_k] = "1"
 
-import sys, time, json, datetime
+import sys, time, json, datetime, pickle
 from pathlib import Path
 
+sys.dont_write_bytecode = True                      # never write __pycache__ next to the (read-only) project code
 HERE = Path(__file__).resolve().parent
-# Where the project's code/, data_out/ and runs/ folders live (the course project's v2 folder).
-# Set OSLO_PROJECT_DIR to point at it; the default assumes this script sits inside that folder.
-V2 = Path(os.environ.get("OSLO_PROJECT_DIR", HERE.parent))
-sys.path.insert(0, str(V2 / "code"))
-# Outputs go to ../data when this script is in the repo's src/ folder, else next to the script.
-OUT = HERE.parent / "data" if HERE.name == "src" and (HERE.parent / "data").is_dir() else HERE
+REPO = HERE.parent if HERE.name == "src" else HERE
+OUT = REPO / "data" if (REPO / "data").is_dir() else REPO
+CACHE_DIR = REPO / ".cache"
+CACHE_DIR.mkdir(exist_ok=True)
+os.environ.setdefault("NUMBA_CACHE_DIR", str(CACHE_DIR / "numba"))   # numba cache must not go into the project folder
+
+V3 = Path(os.environ.get(
+    "OSLO_PROJECT_DIR",
+    r"C:\Users\srl\OneDrive - Högskolan Dalarna\Documents\PhD\RL Work\project\v3"))
+STATION_MASTER = Path(os.environ.get(
+    "OSLO_STATION_MASTER",
+    r"C:\Users\srl\OneDrive - Högskolan Dalarna\Documents\PhD\MSc Theses 2026\T4 data\oslo_station_master.csv"))
+sys.path.insert(0, str(V3 / "code"))
 
 import numpy as np
 import pandas as pd
-from shapely import MultiPoint, Point, box, voronoi_polygons
+import shapely
+from shapely import MultiPoint, Point, STRtree, box, voronoi_polygons
 from shapely.geometry import mapping
+from shapely.geometry.polygon import orient
+from shapely.ops import unary_union
 
 import common
 from common import N_ZONES
-from sim import ReplaySim, HourlyOcc, NoRebalance, run_episode
-from mpc import MPCController, oracle_forecast
+from sim import HourlyOcc, NoRebalance, run_episode
+from mpc import MPCController
+import env_v3
 
 T_START = time.time()
 Z = N_ZONES
 BUDGETS = [40, 20]
 HORIZON = 6
 DT = ["wd", "we"]
+ORACLE_PROFILE = os.environ.get("ORACLE_PROFILE", "actual")
+FRESH = "--fresh" in sys.argv
+PERIODS_WANTED = ["val", "test"]
+if "--periods" in sys.argv:
+    PERIODS_WANTED = sys.argv[sys.argv.index("--periods") + 1].split(",")
+PERIOD_LABELS = {"val": "Validation: 4 weeks, Sept 2025", "test": "Test: 21 weeks, May to Sept 2026"}
+assert V3.name == "v3" and (V3 / "data_out").is_dir(), V3
+assert Path(common.OUT_DIR).resolve() == (V3 / "data_out").resolve(), common.OUT_DIR   # code really reads v3 data
 
-# ----------------------------------------------------------------------------- 2. sim, forecasts
-sim = ReplaySim(budget=40)
-starts = sim.episode_starts("val")
-assert len(starts) == 4, starts
-print("episode starts:", starts, [str(sim.hours[s]) for s in starts])
+print(f"project dir: {V3}\nrepo: {REPO}  out: {OUT}\nshapely {shapely.__version__}, numpy {np.__version__}", flush=True)
 
-profile = np.asarray(common.preds_to_array(common.load_preds("naive", 0), sim.hours))
-gru_seeds = [common.preds_to_array(common.load_preds("gru", s), sim.hours) for s in (0, 1, 2)]
-gru = np.nanmean(np.stack(gru_seeds), axis=0).astype(np.float32)
-actual = oracle_forecast(sim, "val")
-assert np.isfinite(actual[starts[0]:starts[0] + 168]).all()
 
-# ----------------------------------------------------------------------------- 4. validation hours
-val_h = np.unique(np.concatenate([np.arange(s, s + 168) for s in starts]))
-assert len(val_h) == 4 * 168
+def log(msg):
+    print(f"[{time.time() - T_START:7.1f}s] {msg}", flush=True)
+
+
+# ----------------------------------------------------------------------------- 1. sim, forecasts
+sim = env_v3.base_sim().clone()
 hod_of = sim.hod
 dt_of = np.where(sim.dow < 5, 0, 1)                  # 0 = wd, 1 = we
-n_days = {}
-for k, name in enumerate(DT):
-    n_days[name] = int(((dt_of[val_h] == k)).sum() // 24)
-print("days per daytype:", n_days)
-assert n_days == {"wd": 20, "we": 8}, n_days
-
-
-def cell_hours(k, hh):
-    """indices h (into the hour grid, restricted to validation) with daytype k and hour of day hh"""
-    return val_h[(dt_of[val_h] == k) & (hod_of[val_h] == hh)]
-
-
-def mean_layer(arr_TZ, nan=False):
-    """(T, Z) -> {'wd': (Z,24), 'we': (Z,24)} mean per zone x hod x daytype over validation hours."""
-    out = {}
-    for k, name in enumerate(DT):
-        m = np.zeros((Z, 24))
-        for hh in range(24):
-            idx = cell_hours(k, hh)
-            v = arr_TZ[idx].astype(float)
-            m[:, hh] = np.nanmean(v, axis=0) if nan else v.mean(axis=0)
-        out[name] = m
-    return out
-
-
-# ----------------------------------------------------------------------------- 5. demand layers
+gru = env_v3.get_forecast("gru_mean")                # (T, Z, 2), the rung the paper's MPC used
+profile = env_v3.get_profile()                       # naive seed 0
 panel = common.load_panel()
 dep_obs = panel.pivot(index="ts", columns="zone", values="dep").reindex(index=sim.hours, columns=range(Z)).values
 arr_obs = panel.pivot(index="ts", columns="zone", values="arr").reindex(index=sim.hours, columns=range(Z)).values
-layers = {}
-layers["dep"] = mean_layer(dep_obs)
-layers["arr"] = mean_layer(arr_obs)
-layers["dep_gru"] = mean_layer(gru[..., 0], nan=True)
-layers["arr_gru"] = mean_layer(gru[..., 1], nan=True)
-for k in ("dep", "arr", "dep_gru", "arr_gru"):
-    assert all(np.isfinite(layers[k][d]).all() for d in DT), k
-print("demand layers done; total dep/week (obs):",
-      round(sum(layers["dep"][d].sum() * n_days[d] for d in DT) / 4, 1))
+actual = env_v3.get_actual()                         # (T, Z, 2) realised dep, arr (NaN -> 0)
+hist_occ = np.load(common.OUT_DIR / "hist_occ.npy")  # v3 hist_occ (also the default inside HourlyOcc / MPCController)
 
 
-# ----------------------------------------------------------------------------- 6. unmet-demand runs
-def accumulate(rows, with_count=False):
-    """rows: list of (h, vec(Z)). Returns {'wd','we'} -> (Z,24) of sum / days (or / count)."""
+# ----------------------------------------------------------------------------- 2. periods
+periods = {}
+for pname in PERIODS_WANTED:
+    starts = env_v3.episode_starts(pname)
+    hrs = np.unique(np.concatenate([np.arange(s, s + 168) for s in starts]))
+    assert len(hrs) == 168 * len(starts), (pname, "overlapping episode windows")
+    n_days = {}
+    for k, d in enumerate(DT):
+        n_hours = int((dt_of[hrs] == k).sum())
+        assert n_hours % 24 == 0
+        n_days[d] = n_hours // 24
+    periods[pname] = dict(starts=starts, hours=hrs, n_days=n_days)
+    log(f"period {pname}: {len(starts)} weeks, days {n_days}, first {sim.hours[starts[0]]}, last start {sim.hours[starts[-1]]}, "
+        f"last hour {sim.hours[starts[-1] + 167]}")
+if "val" in periods:
+    assert len(periods["val"]["starts"]) == 4 and periods["val"]["n_days"] == {"wd": 20, "we": 8}, periods["val"]
+if "test" in periods:
+    assert len(periods["test"]["starts"]) == 21 and periods["test"]["n_days"] == {"wd": 105, "we": 42}, periods["test"]
+
+
+def mean_layer(arr_TZ, P, nan=False):
+    """(T, Z) -> {'wd': (Z,24), 'we': (Z,24)}: mean per zone x hour of day x day type over the period's hours."""
+    out = {}
+    for k, d in enumerate(DT):
+        m = np.zeros((Z, 24))
+        for hh in range(24):
+            idx = P["hours"][(dt_of[P["hours"]] == k) & (hod_of[P["hours"]] == hh)]
+            v = arr_TZ[idx].astype(float)
+            m[:, hh] = np.nanmean(v, axis=0) if nan else v.mean(axis=0)
+        out[d] = m
+    return out
+
+
+def accumulate(rows, P, with_count=False):
+    """rows: list of (h, vec(Z)). Returns {'wd','we'} -> (Z,24) of sum / days of that day type (or / number of decisions)."""
     S = {d: np.zeros((Z, 24)) for d in DT}
     C = {d: np.zeros((Z, 24)) for d in DT}
     for h, v in rows:
@@ -102,11 +121,11 @@ def accumulate(rows, with_count=False):
         C[d][:, hod_of[h]] += 1
     if with_count:
         return {d: S[d] / np.maximum(C[d], 1) for d in DT}
-    return {d: S[d] / n_days[d] for d in DT}
+    return {d: S[d] / P["n_days"][d] for d in DT}
 
 
 class LoggingMPC(MPCController):
-    """MPC that records the hour-1 plan slacks (shortage, overflow) at each decision."""
+    """MPC that records the hour-1 plan slacks (shortage, overflow) at each decision. Same decisions as MPCController."""
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self.slack_log = []
@@ -118,155 +137,309 @@ class LoggingMPC(MPCController):
         return out["target"], sim.budget
 
 
-def run_ctrl(label, ctrl, budget):
+# ----------------------------------------------------------------------------- 3. demand layers
+layers = {p: {} for p in periods}
+for p, P in periods.items():
+    L = layers[p]
+    for name, arr in (("dep", dep_obs), ("arr", arr_obs)):
+        assert np.isfinite(arr[P["hours"]]).all(), (p, name)
+        L[name] = mean_layer(arr, P)
+    for name, j in (("dep_gru", 0), ("arr_gru", 1)):
+        assert np.isfinite(gru[P["hours"]][..., j]).all(), (p, name, "GRU forecast has NaN inside the period")
+        L[name] = mean_layer(gru[..., j], P)
+    P["trips_per_week"] = float(dep_obs[P["hours"]].sum() / len(P["starts"]))
+    log(f"demand layers {p}: mean observed departures/week {P['trips_per_week']:.2f}")
+
+
+# ----------------------------------------------------------------------------- 4. unmet-demand runs
+def cache_path(p):
+    return CACHE_DIR / f"runs_{p}_oracle-{ORACLE_PROFILE}.pkl"
+
+
+def run_ctrl(p, label, ctrl, budget, store):
+    P = periods[p]
+    key = (label, budget)
+    if key in store:
+        log(f"{p:4s} {label:12s} b{budget}: from cache  lost/week {store[key]['wk']:.2f}")
+        return store[key]
     sim.budget = budget
     t0 = time.time()
-    lost_rows, weekly = [], []
-    for s in starts:
+    lost_rows, weekly_each = [], []
+    for wi, s in enumerate(P["starts"]):
+        t1 = time.time()
         tot, df = run_episode(sim, ctrl, s, log=True)
-        weekly.append(tot["lost"])
+        weekly_each.append(int(tot["lost"]))
         for h, lz in zip(df["h"].values, df["lost_zone"].values):
             lost_rows.append((int(h), np.asarray(lz, dtype=float)))
-    lost = accumulate(lost_rows)
-    wk = float(np.mean(weekly))
-    print(f"[{time.time() - T_START:6.1f}s] {label:14s} budget {budget:2d}  lost/week {wk:8.2f}  weeks {weekly}  ({time.time() - t0:.1f}s)", flush=True)
-    return lost, wk, weekly
+        if len(P["starts"]) > 4:
+            print(f"      week {wi:2d}  lost {tot['lost']:5d}  served {tot['served']:6d}  ({time.time() - t1:.1f}s)", flush=True)
+    res = dict(lost=accumulate(lost_rows, P), wk=float(np.mean(weekly_each)), weekly_each=weekly_each,
+               served_each=None, wall=time.time() - t0)
+    if isinstance(ctrl, LoggingMPC):
+        assert len(ctrl.slack_log) == 168 * len(P["starts"]), len(ctrl.slack_log)
+        res["shortage"] = accumulate([(h, s_) for h, s_, o_ in ctrl.slack_log], P, with_count=True)
+        res["overflow"] = accumulate([(h, o_) for h, s_, o_ in ctrl.slack_log], P, with_count=True)
+        res["mpc_fail"] = int(sum(1 for t in ctrl.solve_times) - len(ctrl.slack_log))
+    log(f"{p:4s} {label:12s} b{budget}: lost/week {res['wk']:9.2f}  wall {res['wall']:6.1f}s  weeks {weekly_each}")
+    store[key] = res
+    with open(cache_path(p), "wb") as f:
+        pickle.dump(store, f)
+    return res
 
 
-weekly = {}
-weekly_each = {}
-totals4 = {}                                      # layer name -> 4-week total lost, for the consistency check
-none_lost, wk, we_ = run_ctrl("none", NoRebalance(), 40)
-weekly["none"] = wk; weekly_each["none"] = we_
-for b in BUDGETS:
-    layers[f"lost_none_b{b}"] = none_lost
-    totals4[f"lost_none_b{b}"] = sum(we_)
+weekly = {p: {} for p in periods}
+weekly_each = {p: {} for p in periods}
+totals = {p: {} for p in periods}
+for p, P in periods.items():
+    store = {}
+    if cache_path(p).exists() and not FRESH:
+        store = pickle.load(open(cache_path(p), "rb"))
+    L = layers[p]
+    r = run_ctrl(p, "none", NoRebalance(), 40, store)
+    weekly[p]["none"] = r["wk"]; weekly_each[p]["none"] = r["weekly_each"]
+    for b in BUDGETS:
+        L[f"lost_none_b{b}"] = r["lost"]
+        totals[p][f"lost_none_b{b}"] = sum(r["weekly_each"])
+    oracle_prof = actual if ORACLE_PROFILE == "actual" else profile
+    for b in BUDGETS:
+        r = run_ctrl(p, "heur", HourlyOcc(), b, store)
+        L[f"lost_heur_b{b}"] = r["lost"]; weekly[p][f"heur_b{b}"] = r["wk"]; weekly_each[p][f"heur_b{b}"] = r["weekly_each"]
+        totals[p][f"lost_heur_b{b}"] = sum(r["weekly_each"])
 
-for b in BUDGETS:
-    lost, wk, we_ = run_ctrl("heuristic", HourlyOcc(), b)
-    layers[f"lost_heur_b{b}"] = lost; weekly[f"heur_b{b}"] = wk; weekly_each[f"heur_b{b}"] = we_
-    totals4[f"lost_heur_b{b}"] = sum(we_)
+        r = run_ctrl(p, "mpc", LoggingMPC(gru, profile, horizon=HORIZON), b, store)
+        L[f"lost_mpc_b{b}"] = r["lost"]; weekly[p][f"mpc_b{b}"] = r["wk"]; weekly_each[p][f"mpc_b{b}"] = r["weekly_each"]
+        totals[p][f"lost_mpc_b{b}"] = sum(r["weekly_each"])
+        L[f"shortage_b{b}"] = r["shortage"]; L[f"overflow_b{b}"] = r["overflow"]
+        assert r["mpc_fail"] == 0, f"{r['mpc_fail']} LP failures"
 
-    mpc = LoggingMPC(gru, profile, horizon=HORIZON)
-    lost, wk, we_ = run_ctrl("MPC(GRU)", mpc, b)
-    layers[f"lost_mpc_b{b}"] = lost; weekly[f"mpc_b{b}"] = wk; weekly_each[f"mpc_b{b}"] = we_
-    totals4[f"lost_mpc_b{b}"] = sum(we_)
-    assert len(mpc.slack_log) == 4 * 168, len(mpc.slack_log)
-    layers[f"shortage_b{b}"] = accumulate([(h, s) for h, s, o in mpc.slack_log], with_count=True)
-    layers[f"overflow_b{b}"] = accumulate([(h, o) for h, s, o in mpc.slack_log], with_count=True)
+        r = run_ctrl(p, "oracle", MPCController(actual, oracle_prof, horizon=HORIZON), b, store)
+        L[f"lost_oracle_b{b}"] = r["lost"]; weekly[p][f"oracle_b{b}"] = r["wk"]; weekly_each[p][f"oracle_b{b}"] = r["weekly_each"]
+        totals[p][f"lost_oracle_b{b}"] = sum(r["weekly_each"])
+        L[f"oracle_gain_b{b}"] = {d: L[f"lost_mpc_b{b}"][d] - L[f"lost_oracle_b{b}"][d] for d in DT}
 
-    orc = MPCController(actual, profile, horizon=HORIZON)
-    lost, wk, we_ = run_ctrl("MPC(oracle)", orc, b)
-    layers[f"lost_oracle_b{b}"] = lost; weekly[f"oracle_b{b}"] = wk; weekly_each[f"oracle_b{b}"] = we_
-    totals4[f"lost_oracle_b{b}"] = sum(we_)
-
-    layers[f"oracle_gain_b{b}"] = {d: layers[f"lost_mpc_b{b}"][d] - layers[f"lost_oracle_b{b}"][d] for d in DT}
-
-# ----------------------------------------------------------------------------- 8. spot checks
-print("\n== spot checks ==")
-checks = [("mpc_b40", 115.25, 0.01), ("heur_b40", 1016.25, 0.01), ("oracle_b40", 33.25, 0.01), ("none", 6124.0, 1.0)]
-for k, expected, tol in checks:
-    print(f"  weekly[{k}] = {weekly[k]:.2f}  (expected {expected})")
-    assert abs(weekly[k] - expected) <= tol, (k, weekly[k], expected)
-assert sorted(weekly_each["mpc_b40"]) == sorted([156, 161, 35, 109]), weekly_each["mpc_b40"]
-print("  MPC b40 weekly lost per week:", weekly_each["mpc_b40"])
-for name, tot in totals4.items():
-    lay = layers[name]
-    s = sum(lay[d].sum() * n_days[d] for d in DT)
-    print(f"  layer {name:16s} weighted sum {s:9.2f}  vs run total {tot}")
-    assert abs(s - tot) <= 1.0, (name, s, tot)
-for b in BUDGETS:
-    s = sum(layers[f"oracle_gain_b{b}"][d].sum() * n_days[d] for d in DT)
-    assert abs(s - (totals4[f"lost_mpc_b{b}"] - totals4[f"lost_oracle_b{b}"])) <= 1.0
-
-# ----------------------------------------------------------------------------- 7. curve
-rm = pd.read_csv(V2 / "runs" / "regime_map_val.csv")
-mean_lost = rm.groupby(["budget", "forecast", "controller"])["lost"].mean()
-curve_budgets = sorted(int(b) for b in rm["budget"].unique())
+# ----------------------------------------------------------------------------- 5. spot checks
+print("\n== spot checks (tolerance 0.5 trips) ==", flush=True)
+check_rows = []
 
 
-def series(ctrl, fc):
-    return [round(float(mean_lost.loc[(b, fc, ctrl)]), 3) for b in curve_budgets]
+def check(period, what, expected, got, tol=0.5):
+    ok = abs(expected - got) <= tol
+    check_rows.append((period, what, expected, got, ok))
+    print(f"  {'OK  ' if ok else 'FAIL'} {period:4s} {what:34s} expected {expected:10.3f}  got {got:10.3f}  diff {got - expected:+8.3f}")
 
 
-curve = {
-    "budgets": curve_budgets,
-    "series": {
-        "heuristic": series("HourlyOcc", "gru"),
-        "lp_gru": series("LP", "gru"),
-        "mpc_gru": series("MPC", "gru"),
-        "mpc_oracle": series("MPC", "oracle1h"),
-    },
-}
-g = rm[(rm.budget == 40) & (rm.controller == "MPC") & (rm.forecast == "gru")]
-curve["trips_per_week"] = round(float((g["served"] + g["lost"]).mean()), 3)
-print("curve:", json.dumps(curve))
-i40 = curve_budgets.index(40)
-assert abs(curve["series"]["mpc_gru"][i40] - weekly["mpc_b40"]) < 0.01
-assert abs(curve["series"]["heuristic"][i40] - weekly["heur_b40"]) < 0.01
+val_ref = pd.read_csv(V3 / "runs" / "val_references.csv")
+test_ev = pd.read_csv(V3 / "runs" / "test_eval_v3.csv")
+if "val" in periods:
+    for k, e in (("none", 6112.5), ("heur_b40", 1008.0), ("mpc_b40", 121.25), ("mpc_b20", 1621.75)):
+        check("val", f"hard-coded weekly[{k}]", e, weekly["val"][k])
+    assert weekly_each["val"]["mpc_b40"] == [118, 176, 62, 129], weekly_each["val"]["mpc_b40"]
+    assert weekly_each["val"]["mpc_b20"] == [1894, 1836, 1104, 1653], weekly_each["val"]["mpc_b20"]
+    for ctrl, key in (("NO_REBALANCE", "none"), ("HEURISTIC", "heur"), ("FULL_MPC", "mpc")):
+        for b in BUDGETS:
+            k = "none" if key == "none" else f"{key}_b{b}"
+            g = val_ref[(val_ref.controller == ctrl) & (val_ref.budget == b)].sort_values("week")["lost"].values
+            check("val", f"val_references {ctrl} b{b} mean", float(g.mean()), weekly["val"][k])
+            for wi, (a, c) in enumerate(zip(g, weekly_each["val"][k])):
+                check_rows.append(("val", f"{ctrl} b{b} week {wi}", float(a), float(c), abs(a - c) <= 0.5))
+            if not all(abs(a - c) <= 0.5 for a, c in zip(g, weekly_each["val"][k])):
+                print(f"  per-week MISMATCH val {ctrl} b{b}: csv {list(g)} got {weekly_each['val'][k]}")
+if "test" in periods:
+    for ctrl, key in (("NO_REBALANCE", "none"), ("HEURISTIC", "heur"), ("FULL_MPC", "mpc"), ("ORACLE_MPC", "oracle")):
+        for b in BUDGETS:
+            k = "none" if key == "none" else f"{key}_b{b}"
+            g = test_ev[(test_ev.controller == ctrl) & (test_ev.budget == b)].sort_values("week")
+            assert len(g) == 21 and list(g["start_h"]) == periods["test"]["starts"], (ctrl, b)
+            check("test", f"test_eval_v3 {ctrl} b{b} mean", float(g["lost"].mean()), weekly["test"][k])
+            for wi, (a, c) in enumerate(zip(g["lost"].values, weekly_each["test"][k])):
+                check_rows.append(("test", f"{ctrl} b{b} week {wi}", float(a), float(c), abs(a - c) <= 0.5))
+            bad = [(wi, int(a), c) for wi, (a, c) in enumerate(zip(g["lost"].values, weekly_each["test"][k])) if abs(a - c) > 0.5]
+            if bad:
+                print(f"  per-week MISMATCH test {ctrl} b{b} (week, csv, got): {bad}")
+for p in periods:
+    for name, tot in totals[p].items():
+        lay = layers[p][name]
+        s = sum(lay[d].sum() * periods[p]["n_days"][d] for d in DT)
+        ok = abs(s - tot) <= 0.5
+        check_rows.append((p, f"layer sum {name}", float(tot), float(s), ok))
+        print(f"  {'OK  ' if ok else 'FAIL'} {p:4s} layer {name:16s} weighted sum {s:10.2f}  vs run total {tot}")
+    for b in BUDGETS:
+        s = sum(layers[p][f"oracle_gain_b{b}"][d].sum() * periods[p]["n_days"][d] for d in DT)
+        e = totals[p][f"lost_mpc_b{b}"] - totals[p][f"lost_oracle_b{b}"]
+        check_rows.append((p, f"layer sum oracle_gain_b{b}", float(e), float(s), abs(s - e) <= 0.5))
+n_fail = sum(1 for r in check_rows if not r[4])
+print(f"spot checks: {len(check_rows) - n_fail} passed, {n_fail} failed", flush=True)
+if n_fail:
+    print("FAILED checks:", [r[:4] for r in check_rows if not r[4]])
+    sys.exit(f"{n_fail} spot checks failed; not writing outputs")
+if set(periods) != {"val", "test"}:
+    sys.exit("debug run (not both periods): checks passed, outputs not written")
 
-# ----------------------------------------------------------------------------- 3. zone polygons
+# ----------------------------------------------------------------------------- 6. zone polygons, stations, edges
 zdf = pd.read_csv(common.OUT_DIR / "zones.csv").sort_values("zone").reset_index(drop=True)
 assert len(zdf) == 30 and list(zdf["zone"]) == list(range(30))
-lat0, lon0 = zdf["lat"].mean(), zdf["lon"].mean()
+sm = pd.read_csv(STATION_MASTER, encoding="utf-8")
+sz = pd.read_csv(common.OUT_DIR / "station_zone.csv")
+st = sz.merge(sm[["station_id", "name", "lat", "lon", "capacity", "slots"]], on="station_id", how="left", validate="1:1")
+assert len(st) == 276 and st[["lat", "lon", "name"]].notna().all().all()
+n_cap_fallback = int(st["capacity"].isna().sum())
+st["cap_final"] = st["capacity"].fillna(st["slots"])
+n_cap_missing = int(st["cap_final"].isna().sum())
+st["cap_final"] = st["cap_final"].fillna(st["cap"])                 # last resort: cap column of station_zone.csv
+print(f"stations: {len(st)}; capacity empty -> used slots: {n_cap_fallback - n_cap_missing}; "
+      f"empty in both (used station_zone cap): {n_cap_missing}")
+assert (st["cap_final"] > 0).all()
+nst = st.groupby("zone").size().reindex(range(30)).values
+assert (nst == zdf["n_stations"].values).all(), "station count per zone differs from zones.csv"
+
+lat0, lon0 = st["lat"].mean(), st["lon"].mean()
 kx = np.cos(np.radians(lat0)) * 111320.0
 ky = 110540.0
-px = (zdf["lon"].values - lon0) * kx
-py = (zdf["lat"].values - lat0) * ky
+px = (st["lon"].values - lon0) * kx
+py = (st["lat"].values - lat0) * ky
 pts = [Point(x, y) for x, y in zip(px, py)]
 mp = MultiPoint(pts)
+n_unique = len({(round(x, 3), round(y, 3)) for x, y in zip(px, py)})
 env = box(px.min() - 50000, py.min() - 50000, px.max() + 50000, py.max() + 50000)
 cells = list(voronoi_polygons(mp, extend_to=env).geoms)
-clip = mp.convex_hull.buffer(700.0)
-feats = []
-for i, p in enumerate(pts):
-    cell = [c for c in cells if c.contains(p)]
-    assert len(cell) == 1, (i, len(cell))
-    poly = cell[0].intersection(clip)
-    assert poly.geom_type == "Polygon" and poly.contains(p), (i, poly.geom_type)
-    ring = [[round(float(x / kx + lon0), 6), round(float(y / ky + lat0), 6)] for x, y in poly.exterior.coords]
+print(f"voronoi: {len(cells)} cells for {len(pts)} stations ({n_unique} distinct positions)")
+clip = mp.convex_hull.buffer(400.0)
+tree = STRtree(cells)
+zone_cells = {z: [] for z in range(30)}
+for i, p_ in enumerate(pts):
+    hit = tree.query(p_, predicate="intersects")
+    assert len(hit) >= 1, i
+    zone_cells[int(st["zone"].iloc[i])].append(cells[int(hit[0])].intersection(clip))
+
+
+def to_lonlat(geom):
+    return shapely.transform(geom, lambda c: np.column_stack([c[:, 0] / kx + lon0, c[:, 1] / ky + lat0]))
+
+
+def round6(geom):
+    return shapely.transform(geom, lambda c: np.round(c, 6))
+
+
+feats, zone_geoms = [], []
+for z in range(30):
+    u = unary_union(zone_cells[z]).buffer(0)
+    assert u.is_valid and u.geom_type in ("Polygon", "MultiPolygon") and not u.is_empty, (z, u.geom_type)
+    g = round6(to_lonlat(u))
+    g = g if g.is_valid else g.buffer(0)
+    assert g.is_valid, z
+    if g.geom_type == "Polygon":
+        g = orient(g, 1.0)
+    else:
+        g = shapely.MultiPolygon([orient(q, 1.0) for q in g.geoms])
+    zone_geoms.append(g)
     feats.append({
         "type": "Feature",
-        "properties": {"zone": int(zdf.zone[i]), "cap": int(round(zdf.cap[i])), "n_stations": int(zdf.n_stations[i]),
-                       "lat": round(float(zdf.lat[i]), 6), "lon": round(float(zdf.lon[i]), 6)},
-        "geometry": {"type": "Polygon", "coordinates": [ring]},
+        "properties": {"zone": int(zdf.zone[z]), "cap": int(round(zdf.cap[z])), "n_stations": int(zdf.n_stations[z]),
+                       "lat": round(float(zdf.lat[z]), 6), "lon": round(float(zdf.lon[z]), 6)},
+        "geometry": mapping(g),
     })
-zones_fc = {"type": "FeatureCollection", "features": feats}
 assert len(feats) == 30
-print("zone polygons ok; mean vertices:", np.mean([len(f["geometry"]["coordinates"][0]) for f in feats]).round(1))
+# stations vs their zone polygon (lon/lat, after rounding)
+outside = []
+for i in range(len(st)):
+    pt = Point(float(st["lon"].iloc[i]), float(st["lat"].iloc[i]))
+    if not zone_geoms[int(st["zone"].iloc[i])].contains(pt):
+        outside.append((int(st["station_id"].iloc[i]), int(st["zone"].iloc[i])))
+n_multi = sum(1 for g in zone_geoms if g.geom_type == "MultiPolygon")
+n_holes = sum(len(q.interiors) for g in zone_geoms for q in (g.geoms if g.geom_type == "MultiPolygon" else [g]))
+tot_area = sum(g.area for g in zone_geoms)
+print(f"zone polygons: 30 features ({n_multi} MultiPolygon, {n_holes} interior rings); stations outside own zone polygon: "
+      f"{len(outside)} {outside[:10]}")
+assert len(outside) <= 0.05 * len(st), outside      # "contains most of its stations"
+zones_fc = {"type": "FeatureCollection", "features": feats}
 
-# ----------------------------------------------------------------------------- 9. write
+stations = [{"id": int(r.station_id), "name": str(r.name), "lat": round(float(r.lat), 6), "lon": round(float(r.lon), 6),
+             "zone": int(r.zone), "cap": int(round(r.cap_final))} for r in st.itertuples()]
+assert len(stations) == 276
+
+ei = np.load(common.OUT_DIR / "edge_index.npy")
+pairs = sorted({(int(min(a, b)), int(max(a, b))) for a, b in zip(ei[0], ei[1]) if a != b})
+edges = [[a, b] for a, b in pairs]
+print(f"edges: edge_index columns {ei.shape[1]} -> {len(edges)} undirected pairs (summary.json says "
+      f"{json.load(open(common.OUT_DIR / 'summary.json'))['edges']})")
+
+# ----------------------------------------------------------------------------- 7. ladder
+ta = pd.read_csv(V3 / "runs" / "test_eval_v3_table_a.csv").set_index("method")
+
+
+def row_lost(method):
+    return [float(ta.loc[method, "lost_B20"]), float(ta.loc[method, "lost_B40"])]
+
+
+def ppo_mean(arch):
+    rows = [f"PPO-{arch} s{s} [argmax]" for s in range(3)]
+    assert all(r in ta.index for r in rows), rows
+    v = np.array([row_lost(r) for r in rows])
+    return [float(x) for x in v.mean(axis=0)]
+
+
+def r3(v):
+    return [round(float(x), 1) for x in v]
+
+
+ladder_test = [
+    {"key": "none", "label": "No rebalancing", "kind": "reference", "lost": r3(row_lost("NO_REBALANCE"))},
+    {"key": "heur", "label": "Hourly occupancy rule", "kind": "reference", "lost": r3(row_lost("HEURISTIC"))},
+    {"key": "mpc", "label": "Full MPC", "kind": "reference", "lost": r3(row_lost("FULL_MPC"))},
+    {"key": "ppo_mlp", "label": "PPO, MLP policy", "kind": "learned", "lost": r3(ppo_mean("MLP"))},
+    {"key": "ppo_gnn", "label": "PPO, GNN policy", "kind": "learned", "lost": r3(ppo_mean("GNN"))},
+    {"key": "oracle", "label": "MPC, perfect forecast", "kind": "ceiling", "lost": r3(row_lost("ORACLE_MPC"))},
+]
+vr = val_ref.groupby(["controller", "budget"])["lost"].mean()
+val_rows = [("none", "No rebalancing", "NO_REBALANCE"), ("heur", "Hourly occupancy rule", "HEURISTIC"), ("mpc", "Full MPC", "FULL_MPC")]
+ladder_val = [{"key": k, "label": lab, "kind": "reference", "lost": r3([vr.loc[(c, 20)], vr.loc[(c, 40)]])} for k, lab, c in val_rows]
+if "ORACLE_MPC" in set(val_ref.controller):
+    ladder_val.append({"key": "oracle", "label": "MPC, perfect forecast", "kind": "ceiling",
+                       "lost": r3([vr.loc[("ORACLE_MPC", 20)], vr.loc[("ORACLE_MPC", 40)]])})
+ladder = {"budgets": [20, 40], "test": ladder_test, "val": ladder_val}
+for row in ladder_test:
+    print("  ladder test", row["key"], row["lost"])
+# ladder vs own runs (reference rows)
+for key, k20, k40 in (("none", "none", "none"), ("heur", "heur_b20", "heur_b40"), ("mpc", "mpc_b20", "mpc_b40"), ("oracle", "oracle_b20", "oracle_b40")):
+    row = next(r for r in ladder_test if r["key"] == key)
+    assert abs(row["lost"][0] - weekly["test"][k20]) < 0.06 and abs(row["lost"][1] - weekly["test"][k40]) < 0.06, (key, row, weekly["test"][k20], weekly["test"][k40])
+
+# ----------------------------------------------------------------------------- 8. write
 layer_order = (["dep", "arr", "dep_gru", "arr_gru"]
                + [f"{n}_b{b}" for b in BUDGETS for n in ("lost_none", "lost_heur", "lost_mpc", "lost_oracle", "oracle_gain", "shortage", "overflow")])
-layers_json = {k: {d: np.round(layers[k][d], 3).tolist() for d in DT} for k in layer_order}
+layers_json = {p: {k: {d: np.round(layers[p][k][d], 3).tolist() for d in DT} for k in layer_order} for p in ("val", "test")}
 
-first = sim.hours[starts[0]]
-last = sim.hours[starts[-1] + 167]
 meta = {
-    "title": "Oslo bike-share: demand and rebalancing (prototype)",
-    "period": f"4 validation weeks, Mon {first.date()} to Sun {last.date()}",
-    "n_zones": 30,
+    "title": "Oslo bike-share: demand and rebalancing",
+    "source": "v3 simulator and MPC (the submitted study)",
+    "periods": {p: {"label": PERIOD_LABELS[p], "n_weeks": len(periods[p]["starts"]), "days": periods[p]["n_days"]} for p in ("val", "test")},
     "budgets_run": BUDGETS,
     "horizon": HORIZON,
     "built": datetime.datetime.now().replace(microsecond=0).isoformat(),
 }
-map_data = {"meta": meta, "zones": zones_fc, "daytypes": DT, "layers": layers_json,
-            "weekly": {k: round(float(v), 3) for k, v in weekly.items()}, "curve": curve}
+map_data = {
+    "meta": meta, "zones": zones_fc, "stations": stations, "edges": edges, "daytypes": DT, "layers": layers_json,
+    "weekly": {p: {k: round(float(v), 3) for k, v in weekly[p].items()} for p in ("val", "test")},
+    "trips_per_week": {p: round(periods[p]["trips_per_week"], 3) for p in ("val", "test")},
+    "ladder": ladder,
+}
 with open(OUT / "map_data.json", "w", encoding="utf-8") as f:
-    json.dump(map_data, f, separators=(",", ":"))
+    json.dump(map_data, f, separators=(",", ":"), ensure_ascii=False)
 
 gj_feats = []
 for zi, feat in enumerate(feats):
     props = dict(feat["properties"])
-    for k in layer_order:
-        for d in DT:
-            for hh in range(24):
-                props[f"{k}_{d}_{hh:02d}"] = round(float(layers[k][d][zi, hh]), 3)
+    for p in ("val", "test"):
+        for k in layer_order:
+            for d in DT:
+                for hh in range(24):
+                    props[f"{p}_{k}_{d}_{hh:02d}"] = round(float(layers[p][k][d][zi, hh]), 3)
     gj_feats.append({"type": "Feature", "properties": props, "geometry": feat["geometry"]})
 with open(OUT / "layers.geojson", "w", encoding="utf-8") as f:
-    json.dump({"type": "FeatureCollection", "features": gj_feats}, f, separators=(",", ":"))
+    json.dump({"type": "FeatureCollection", "features": gj_feats}, f, separators=(",", ":"), ensure_ascii=False)
 
 print("\nweekly:", json.dumps(map_data["weekly"]))
+print("trips_per_week:", json.dumps(map_data["trips_per_week"]))
 for fn in ("map_data.json", "layers.geojson"):
-    print(f"{fn}: {(HERE / fn).stat().st_size / 1024:.1f} KB")
+    print(f"{fn}: {(OUT / fn).stat().st_size / 1024:.1f} KB")
 print(f"total wall time {time.time() - T_START:.1f}s")

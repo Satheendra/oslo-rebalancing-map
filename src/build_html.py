@@ -5,6 +5,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PLACEHOLDER = "__DATA__"
+DISTRICTS_PLACEHOLDER = "__DISTRICTS__"
 # Repo layout: src/build_html.py reads ../data/map_data.json and writes ../docs/index.html.
 # Flat layout (everything in one folder): reads and writes next to the script.
 REPO = HERE.name == "src" and (HERE.parent / "docs").is_dir()
@@ -30,10 +31,22 @@ def main():
 
     raw = src.read_text(encoding="utf-8")
     data = json.loads(raw)  # validate
+    if "val" not in data.get("layers", {}):
+        print("WARNING: %s is not in the version 2 layout (no layers.val); the page will not work" % src.name)
     text = json.dumps(data, separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
 
+    if tpl.count(DISTRICTS_PLACEHOLDER) != 1:
+        sys.exit("template.html must contain the %s placeholder exactly once" % DISTRICTS_PLACEHOLDER)
+    dpath = DATA_DIR / "oslo_districts.geojson"
+    if dpath.exists():
+        dist = json.loads(dpath.read_text(encoding="utf-8"))  # validate
+    else:
+        print("WARNING: %s not found, the district overlay will be empty" % dpath.name)
+        dist = {"type": "FeatureCollection", "features": []}
+    dtext = json.dumps(dist, separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
+
     out = OUT_PATH
-    out.write_text(tpl.replace(PLACEHOLDER, text), encoding="utf-8")
+    out.write_text(tpl.replace(PLACEHOLDER, text).replace(DISTRICTS_PLACEHOLDER, dtext), encoding="utf-8")
     print("wrote %s (%.2f MB) from %s" % (out, out.stat().st_size / 1e6, src.name))
 
 

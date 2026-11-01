@@ -235,7 +235,7 @@ const LAYER_INFO = {
   overflow:    { label: 'MPC predicted overflow', unit: 'bikes', family: 'overflow', budget: true,
                  about: 'How many bikes the MPC plan expects a zone to have too many of in the next hour, so riders could not return a bike. Dark purple zones are where the plan wants to take bikes out.' },
   oracle_gain: { label: 'Oracle gain', unit: 'trips per hour', family: 'diverging', budget: true,
-                 about: 'Lost trips with the GRU forecast minus lost trips with a perfect forecast of the next hour. Red zones are where a better forecast would help most. Blue zones are where the perfect forecast did slightly worse.' }
+                 about: 'Lost trips with the GRU forecast minus lost trips with a perfect forecast (the realised demand for every plan hour, as in the paper). Red zones are where a better forecast would help most. Blue zones are where the perfect forecast did slightly worse.' }
 };
 const LAYER_GROUPS = [
   { title: 'Expected demand', ids: ['dep', 'arr', 'dep_gru', 'arr_gru'] },

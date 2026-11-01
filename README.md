@@ -33,7 +33,7 @@ Open it in a browser. No server is needed; the page is one file with the data in
 |---|---|---|
 | Expected demand | departures, arrivals, GRU forecast of each | the real trips; the GRU forecaster (mean of three seeds) that fed the planner |
 | Unmet demand | lost trips per hour under no rebalancing, the hourly occupancy rule, and the full MPC planner | replay of the real trips in the simulator |
-| Rebalancing pressure | the MPC's predicted shortage and overflow per zone; the oracle gain | the MPC plan each hour; lost trips with the GRU forecast minus lost trips with a perfect next-hour forecast |
+| Rebalancing pressure | the MPC's predicted shortage and overflow per zone; the oracle gain | the MPC plan each hour; lost trips with the GRU forecast minus lost trips with a perfect forecast (realised demand for every plan hour, as in the paper) |
 | Controller ladder (chart) | lost trips per week for no rebalancing, the hourly rule, full MPC, the PPO policies (MLP and GNN encoders) and the MPC with a perfect forecast, at budget 20 or 40 | the paper's table of controller means on the test weeks; the reference runs on the validation weeks |
 
 A *lost trip* is a departure from a zone that has no bike at that moment. *MPC* is model-predictive
@@ -50,7 +50,7 @@ choose among candidate actions for part of the truck budget, on top of the MPC p
 | Full MPC with GRU forecast | 522 |
 | PPO, MLP policy (mean of 3 seeds) | 331 |
 | PPO, GNN policy (mean of 3 seeds) | 302 |
-| MPC with perfect next-hour forecast | 229 |
+| MPC with perfect forecast | 229 |
 
 ## How it was made
 
